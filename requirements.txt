@@ -1,0 +1,5 @@
+customtkinter
+firebase-admin
+pillow
+opencv-python
+python-dateutil
