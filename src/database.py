@@ -24,10 +24,29 @@ class Database:
             FOREIGN KEY (employee_id) REFERENCES employees (id)
         );
         """
+        
+        query_users = """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL,
+            employee_id INTEGER,
+            FOREIGN KEY (employee_id) REFERENCES employees (id)
+        );
+        """
 
         cursor = self.conn.cursor()
         cursor.execute(query_employee)
         cursor.execute(query_attendance)
+        cursor.execute(query_users)
+        
+        # Create default admin user if not exists
+        cursor.execute("SELECT * FROM users WHERE username = 'admin'")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", 
+                          ('admin', 'admin123', 'admin'))
+        
         self.conn.commit()
 
     def add_employee(self, name, email, fingerprint_id):
