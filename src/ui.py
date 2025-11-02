@@ -32,7 +32,8 @@ class AdminDashboard:
         self.on_logout = on_logout
         
         # Set the appearance mode and default color theme
-        ctk.set_appearance_mode("system")  # Options: "system" (default), "light", "dark"
+        saved_theme = db.get_setting('theme_mode', 'System')
+        ctk.set_appearance_mode(saved_theme.lower())  # Options: "system" (default), "light", "dark"
         ctk.set_default_color_theme("blue")  # Options: "blue" (default), "green", "dark-blue"
         
         self.root.title("GDC Attendance System")
@@ -247,6 +248,7 @@ class AdminDashboard:
         btn.bind("<Enter>", on_enter)
         btn.bind("<Leave>", on_leave)
         btn.pack(fill="x", padx=10, pady=5)
+        
         return btn
         
     def nav_button_click(self, text, command):
@@ -610,6 +612,23 @@ class AdminDashboard:
         interval_entry = ctk.CTkEntry(controls, textvariable=self.interval_var, width=120)
         interval_entry.grid(row=3, column=0, sticky="w", pady=4)
 
+        # Theme selection
+        theme_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        theme_frame.grid(row=4, column=0, sticky="w", pady=(20, 0))
+
+        theme_label = ctk.CTkLabel(theme_frame, text="Theme Mode:", anchor="w")
+        theme_label.pack(side="left", padx=(0, 10))
+
+        self.theme_var = ctk.StringVar(value=ctk.get_appearance_mode())
+        theme_menu = ctk.CTkOptionMenu(
+            theme_frame,
+            values=["Light", "Dark", "System"],
+            variable=self.theme_var,
+            width=120,
+            command=self.change_theme_mode
+        )
+        theme_menu.pack(side="left")
+
         def save_settings():
             try:
                 ai = int(self.interval_var.get())
@@ -622,6 +641,7 @@ class AdminDashboard:
             self.db.set_setting('auto_save_on_logout', str(self.auto_var.get()))
             self.db.set_setting('auto_save_interval', str(ai))
             self.db.set_setting('confirm_logout', str(self.confirm_var.get()))
+            self.db.set_setting('theme_mode', self.theme_var.get())
             messagebox.showinfo("Saved", "Settings saved successfully")
 
             # restart autosave timer according to new settings
@@ -631,7 +651,7 @@ class AdminDashboard:
                 self.stop_autosave_timer()
 
         save_btn = ctk.CTkButton(controls, text="Save Settings", command=save_settings, fg_color=self.primary_color)
-        save_btn.grid(row=4, column=0, pady=(20, 0))
+        save_btn.grid(row=5, column=0, pady=(20, 0))
 
     # --- Auto-save and state management ---
     def collect_state(self):
@@ -698,6 +718,11 @@ class AdminDashboard:
                 self._autosave_id = None
         except Exception:
             pass
+
+    def change_theme_mode(self, mode):
+        """Change the application theme mode."""
+        ctk.set_appearance_mode(mode.lower())
+        self.db.set_setting('theme_mode', mode)
 
     def logout(self):
         """Logout the current user. If an on_logout callback was provided, call it.
@@ -1005,8 +1030,12 @@ class AdminDashboard:
         
         self.create_page_header("Registered Employees", "View and manage all employees")
         
+        # Main container
+        main_container = ctk.CTkFrame(self.current_frame, fg_color="transparent")
+        main_container.pack(fill="both", expand=True)
+        
         # Search and filter bar
-        filter_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10, height=60)
+        filter_frame = ctk.CTkFrame(main_container, fg_color="white", corner_radius=10, height=60)
         filter_frame.pack(fill="x", pady=(0, 20))
         filter_frame.pack_propagate(False)
         
@@ -1019,10 +1048,21 @@ class AdminDashboard:
         )
         search_entry.pack(side="left", padx=20, pady=12)
         
+        def search_employees():
+            query = search_entry.get().strip().lower()
+            for item in employee_tree.get_children():
+                employee_tree.delete(item)
+            
+            for emp in employees:
+                if (query in emp[1].lower() or  # name
+                    query in emp[2].lower() or  # email
+                    query in emp[3].lower()):   # fingerprint_id
+                    employee_tree.insert("", "end", values=(emp[1], emp[2], emp[3], "Edit"))
+
         search_btn = ctk.CTkButton(
             filter_frame, 
             text="Search", 
-            command=lambda: None,  # Placeholder for search functionality
+            command=search_employees,
             fg_color=self.primary_color,
             text_color="white",
             width=100,
@@ -1030,6 +1070,230 @@ class AdminDashboard:
             corner_radius=5
         )
         search_btn.pack(side="left", padx=10)
+
+        # Clear search button
+        clear_btn = ctk.CTkButton(
+            filter_frame,
+            text="Clear",
+            command=lambda: [search_entry.delete(0, 'end'), refresh_employee_tree()],
+            fg_color="transparent",
+            text_color=self.text_color,
+            border_width=1,
+            border_color="#d1d1d1",
+            hover_color="#e8eaed",
+            width=80,
+            height=36,
+            corner_radius=5
+        )
+        clear_btn.pack(side="left", padx=5)
+
+        def export_employees():
+            try:
+                import csv
+                from tkinter import filedialog
+                
+                # Ask user where to save the file
+                file_path = filedialog.asksaveasfilename(
+                    defaultextension=".csv",
+                    filetypes=[
+                        ("CSV files", "*.csv"),
+                        ("Excel files", "*.xlsx"),
+                        ("All files", "*.*")
+                    ],
+                    initialfile="employee_data.csv"
+                )
+                
+                if not file_path:  # User cancelled
+                    return
+
+                if file_path.endswith('.xlsx'):
+                    try:
+                        import pandas as pd
+                        # Convert to DataFrame and export
+                        df = pd.DataFrame(employees, columns=['ID', 'Name', 'Email', 'Fingerprint ID'])
+                        df.to_excel(file_path, index=False)
+                    except ImportError:
+                        messagebox.showerror("Error", "Excel export requires pandas. Please install it or use CSV format.")
+                        return
+                else:
+                    # Export as CSV
+                    with open(file_path, mode='w', newline='', encoding='utf-8') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(['Name', 'Email', 'Fingerprint ID'])  # Header
+                        for emp in employees:
+                            writer.writerow(emp[1:])  # Skip ID column
+                
+                messagebox.showinfo("Success", f"Employee data exported successfully to {file_path}")
+            
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
+
+        # Export button
+        export_btn = ctk.CTkButton(
+            filter_frame,
+            text="Export Data",
+            command=export_employees,
+            fg_color="transparent",
+            text_color=self.primary_color,
+            border_width=1,
+            border_color=self.primary_color,
+            hover_color="#e8eaed",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        export_btn.pack(side="right", padx=5)
+
+        def import_employees():
+            try:
+                from tkinter import filedialog
+                import csv
+                
+                # Ask user to select the file
+                file_path = filedialog.askopenfilename(
+                    filetypes=[
+                        ("CSV files", "*.csv"),
+                        ("Excel files", "*.xlsx"),
+                        ("All files", "*.*")
+                    ]
+                )
+                
+                if not file_path:  # User cancelled
+                    return
+
+                # Show preview dialog
+                preview_dialog = ctk.CTkToplevel(self.root)
+                preview_dialog.title("Import Preview")
+                preview_dialog.geometry("800x600")
+                preview_dialog.transient(self.root)
+                preview_dialog.grab_set()
+
+                # Center dialog
+                x = self.root.winfo_x() + (self.root.winfo_width() - 800) // 2
+                y = self.root.winfo_y() + (self.root.winfo_height() - 600) // 2
+                preview_dialog.geometry(f"+{x}+{y}")
+
+                # Create preview tree
+                preview_frame = ctk.CTkFrame(preview_dialog)
+                preview_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+                info_label = ctk.CTkLabel(
+                    preview_frame,
+                    text="Review the data before importing. Existing fingerprint IDs will be skipped.",
+                    font=("Segoe UI", 12)
+                )
+                info_label.pack(pady=(0, 10))
+
+                columns = ("name", "email", "fingerprint")
+                preview_tree = ttk.Treeview(preview_frame, columns=columns, show="headings")
+                
+                preview_tree.heading("name", text="Name")
+                preview_tree.heading("email", text="Email")
+                preview_tree.heading("fingerprint", text="Fingerprint ID")
+
+                # Add scrollbar
+                scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=preview_tree.yview)
+                preview_tree.configure(yscrollcommand=scrollbar.set)
+                scrollbar.pack(side="right", fill="y")
+                preview_tree.pack(fill="both", expand=True)
+
+                # Load data
+                data_to_import = []
+                try:
+                    if file_path.endswith('.xlsx'):
+                        try:
+                            import pandas as pd
+                            df = pd.read_excel(file_path)
+                            data_to_import = df.values.tolist()
+                        except ImportError:
+                            messagebox.showerror("Error", "Excel import requires pandas. Please use CSV format.")
+                            preview_dialog.destroy()
+                            return
+                    else:
+                        with open(file_path, mode='r', encoding='utf-8') as file:
+                            reader = csv.reader(file)
+                            next(reader)  # Skip header
+                            data_to_import = list(reader)
+
+                    # Show preview
+                    for row in data_to_import:
+                        preview_tree.insert("", "end", values=row)
+
+                except Exception as e:
+                    messagebox.showerror("Import Error", f"Failed to read file: {str(e)}")
+                    preview_dialog.destroy()
+                    return
+
+                def do_import():
+                    try:
+                        imported = 0
+                        skipped = 0
+                        for row in data_to_import:
+                            try:
+                                if len(row) >= 3:  # Ensure we have all required fields
+                                    name, email, fingerprint = row[0], row[1], row[2]
+                                    try:
+                                        self.db.add_employee(name, email, fingerprint)
+                                        imported += 1
+                                    except Exception:  # Assuming duplicate fingerprint ID
+                                        skipped += 1
+                            except Exception as e:
+                                print(f"Error importing row {row}: {e}")
+                                skipped += 1
+
+                        messagebox.showinfo("Import Complete", 
+                                          f"Successfully imported {imported} employees.\n"
+                                          f"Skipped {skipped} duplicate/invalid records.")
+                        preview_dialog.destroy()
+                        refresh_employee_tree()  # Refresh the main tree view
+                    except Exception as e:
+                        messagebox.showerror("Import Error", f"Failed to import data: {str(e)}")
+
+                # Buttons
+                btn_frame = ctk.CTkFrame(preview_dialog, fg_color="transparent")
+                btn_frame.pack(fill="x", padx=20, pady=10)
+
+                cancel_btn = ctk.CTkButton(
+                    btn_frame,
+                    text="Cancel",
+                    command=preview_dialog.destroy,
+                    fg_color="transparent",
+                    border_width=1,
+                    border_color="#d1d1d1",
+                    text_color=self.text_color,
+                    hover_color="#e8eaed",
+                    width=100
+                )
+                cancel_btn.pack(side="left", padx=5)
+
+                import_btn = ctk.CTkButton(
+                    btn_frame,
+                    text="Import",
+                    command=do_import,
+                    fg_color=self.primary_color,
+                    text_color="white",
+                    width=100
+                )
+                import_btn.pack(side="right", padx=5)
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to start import: {str(e)}")
+
+        # Import button
+        import_btn = ctk.CTkButton(
+            filter_frame,
+            text="Import Data",
+            command=import_employees,
+            fg_color="transparent",
+            text_color=self.primary_color,
+            border_width=1,
+            border_color=self.primary_color,
+            hover_color="#e8eaed",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        import_btn.pack(side="right", padx=5)
         
         # Employees list
         employees_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
@@ -1079,59 +1343,72 @@ class AdminDashboard:
         employees_list_frame = ctk.CTkFrame(employees_frame, fg_color="transparent")
         employees_list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         
-        for i, emp in enumerate(employees):
-            row_frame = ctk.CTkFrame(
-                employees_list_frame, 
-                fg_color="white" if i % 2 == 0 else "#f8f9fa", 
-                height=50, 
-                corner_radius=0
-            )
-            row_frame.pack(fill="x", pady=1)
-            row_frame.pack_propagate(False)
+        # Use Treeview instead of custom frames for better performance and built-in features
+        columns = ("name", "email", "fingerprint", "actions")
+        employee_tree = ttk.Treeview(employees_list_frame, columns=columns, show="headings", style="Treeview")
+        
+        # Configure sorting
+        self.emp_sort_states = {col: False for col in columns}  # False = ascending, True = descending
+        
+        def sort_employee_column(col):
+            items = [(employee_tree.set(item, col), item) for item in employee_tree.get_children("")]
             
-            # Name
-            name_label = ctk.CTkLabel(
-                row_frame, 
-                text=emp[1], 
-                font=("Segoe UI", 14),
-                text_color=self.text_color
-            )
-            name_label.place(relx=widths[0]/2, rely=0.5, anchor="center")
+            # Regular string sort
+            items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=self.emp_sort_states[col])
             
-            # Email
-            email_label = ctk.CTkLabel(
-                row_frame, 
-                text=emp[2], 
-                font=("Segoe UI", 14),
-                text_color=self.text_color
-            )
-            email_label.place(relx=widths[0] + widths[1]/2, rely=0.5, anchor="center")
+            # Rearrange items
+            for idx, (_, item) in enumerate(items):
+                employee_tree.move(item, "", idx)
             
-            # Fingerprint ID
-            fp_label = ctk.CTkLabel(
-                row_frame, 
-                text=emp[3], 
-                font=("Segoe UI", 14),
-                text_color=self.text_color
-            )
-            fp_label.place(relx=widths[0] + widths[1] + widths[2]/2, rely=0.5, anchor="center")
+            # Toggle sort state
+            self.emp_sort_states[col] = not self.emp_sort_states[col]
             
-            # Actions
-            actions_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
-            actions_frame.place(relx=widths[0] + widths[1] + widths[2] + widths[3]/2, rely=0.5, anchor="center")
-            
-            edit_btn = ctk.CTkButton(
-                actions_frame, 
-                text="Edit", 
-                command=lambda: None,  # Placeholder for edit functionality
-                fg_color="transparent",
-                text_color=self.primary_color,
-                hover_color="#e8eaed",
-                width=60,
-                height=30,
-                corner_radius=5
-            )
-            edit_btn.pack(side="left", padx=5)
+            # Update column headers
+            for c in columns:
+                if c == col:
+                    direction = "↓" if self.emp_sort_states[c] else "↑"
+                    employee_tree.heading(c, text=f"{c.title()} {direction}", 
+                                       command=lambda _c=c: sort_employee_column(_c))
+                else:
+                    employee_tree.heading(c, text=c.title(), 
+                                       command=lambda _c=c: sort_employee_column(_c))
+        
+        # Set up columns
+        employee_tree.heading("name", text="Name", command=lambda: sort_employee_column("name"))
+        employee_tree.heading("email", text="Email", command=lambda: sort_employee_column("email"))
+        employee_tree.heading("fingerprint", text="Fingerprint ID", command=lambda: sort_employee_column("fingerprint"))
+        employee_tree.heading("actions", text="Actions")
+        
+        employee_tree.column("name", width=200, minwidth=150)
+        employee_tree.column("email", width=250, minwidth=200)
+        employee_tree.column("fingerprint", width=120, minwidth=100)
+        employee_tree.column("actions", width=100, minwidth=80)
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(employees_list_frame, orient="vertical", command=employee_tree.yview)
+        employee_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        employee_tree.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        def refresh_employee_tree():
+            for item in employee_tree.get_children():
+                employee_tree.delete(item)
+            for emp in employees:
+                employee_tree.insert("", "end", values=(emp[1], emp[2], emp[3], "Edit"))
+        
+        # Initial load
+        refresh_employee_tree()
+        
+        def on_tree_click(event):
+            region = employee_tree.identify("region", event.x, event.y)
+            if region == "cell":
+                column = employee_tree.identify_column(event.x)
+                if str(column) == "#4":  # Actions column
+                    item = employee_tree.selection()[0]
+                    emp_name = employee_tree.item(item)['values'][0]
+                    messagebox.showinfo("Edit", f"Edit functionality for {emp_name} (to be implemented)")
+        
+        employee_tree.bind('<ButtonRelease-1>', on_tree_click)
 
     # ----------------- Mark Attendance -----------------
     def show_mark_attendance(self):
@@ -1239,32 +1516,342 @@ class AdminDashboard:
         
         self.create_page_header("Attendance Records", "View and export attendance data")
         
-        # Filter bar
-        filter_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10, height=60)
+        # Filter bar with advanced options
+        filter_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
         filter_frame.pack(fill="x", pady=(0, 20))
-        filter_frame.pack_propagate(False)
-        
-        date_label = ctk.CTkLabel(
-            filter_frame, 
-            text="Date:", 
+
+        # Top row - Date range and employee filter
+        top_row = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=20, pady=10)
+
+        # Date range
+        date_range_frame = ctk.CTkFrame(top_row, fg_color="transparent")
+        date_range_frame.pack(side="left")
+
+        from_label = ctk.CTkLabel(
+            date_range_frame, 
+            text="From:", 
             font=("Segoe UI", 14),
             text_color=self.text_color
         )
-        date_label.pack(side="left", padx=(20, 5), pady=12)
+        from_label.pack(side="left", padx=(0, 5))
         
-        date_entry = ctk.CTkEntry(
-            filter_frame, 
+        from_date = ctk.CTkEntry(
+            date_range_frame, 
             placeholder_text="YYYY-MM-DD",
-            width=150,
+            width=120,
             height=36,
             corner_radius=5
         )
-        date_entry.pack(side="left", padx=5, pady=12)
+        from_date.pack(side="left", padx=5)
+
+        to_label = ctk.CTkLabel(
+            date_range_frame, 
+            text="To:", 
+            font=("Segoe UI", 14),
+            text_color=self.text_color
+        )
+        to_label.pack(side="left", padx=(10, 5))
+        
+        to_date = ctk.CTkEntry(
+            date_range_frame, 
+            placeholder_text="YYYY-MM-DD",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        to_date.pack(side="left", padx=5)
+
+        # Calendar picker buttons
+        def show_calendar(entry_widget):
+            import tkcalendar
+            
+            top = ctk.CTkToplevel(self.root)
+            top.title("Select Date")
+            
+            def set_date():
+                selected_date = cal.get_date()
+                entry_widget.delete(0, 'end')
+                entry_widget.insert(0, selected_date)
+                top.destroy()
+            
+            cal = tkcalendar.Calendar(
+                top,
+                selectmode='day',
+                date_pattern='yyyy-mm-dd'
+            )
+            cal.pack(padx=10, pady=10)
+            
+            ok_btn = ctk.CTkButton(
+                top,
+                text="OK",
+                command=set_date,
+                width=80
+            )
+            ok_btn.pack(pady=5)
+            
+            # Position calendar popup near the entry widget
+            x = entry_widget.winfo_rootx()
+            y = entry_widget.winfo_rooty() + entry_widget.winfo_height()
+            top.geometry(f"+{x}+{y}")
+
+        from_cal_btn = ctk.CTkButton(
+            date_range_frame,
+            text="📅",
+            width=36,
+            height=36,
+            command=lambda: show_calendar(from_date)
+        )
+        from_cal_btn.pack(side="left", padx=(0, 10))
+
+        to_cal_btn = ctk.CTkButton(
+            date_range_frame,
+            text="📅",
+            width=36,
+            height=36,
+            command=lambda: show_calendar(to_date)
+        )
+        to_cal_btn.pack(side="left")
+
+        # Employee filter
+        employee_frame = ctk.CTkFrame(top_row, fg_color="transparent")
+        employee_frame.pack(side="left", padx=20)
+
+        emp_label = ctk.CTkLabel(
+            employee_frame,
+            text="Employee:",
+            font=("Segoe UI", 14),
+            text_color=self.text_color
+        )
+        emp_label.pack(side="left", padx=(0, 5))
+
+        # Get all employee names for the dropdown
+        all_employees = self.db.get_all_employees()
+        employee_names = ["All Employees"] + [emp[1] for emp in all_employees]
+        employee_var = ctk.StringVar(value="All Employees")
+        
+        employee_dropdown = ctk.CTkOptionMenu(
+            employee_frame,
+            values=employee_names,
+            variable=employee_var,
+            width=200,
+            height=36
+        )
+        employee_dropdown.pack(side="left")
+
+        # Bottom row - Status filter and buttons
+        bottom_row = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        bottom_row.pack(fill="x", padx=20, pady=(0, 10))
+
+        # Status filter
+        status_frame = ctk.CTkFrame(bottom_row, fg_color="transparent")
+        status_frame.pack(side="left")
+
+        status_label = ctk.CTkLabel(
+            status_frame,
+            text="Status:",
+            font=("Segoe UI", 14),
+            text_color=self.text_color
+        )
+        status_label.pack(side="left", padx=(0, 5))
+
+        status_var = ctk.StringVar(value="All")
+        status_dropdown = ctk.CTkOptionMenu(
+            status_frame,
+            values=["All", "Present", "Absent", "Late"],
+            variable=status_var,
+            width=120,
+            height=36
+        )
+        status_dropdown.pack(side="left", padx=5)
+
+        def apply_filters():
+            try:
+                # Get filter values
+                start_date = from_date.get().strip()
+                end_date = to_date.get().strip()
+                employee = employee_var.get()
+                status = status_var.get()
+
+                # Validate dates if provided
+                if start_date:
+                    try:
+                        datetime.strptime(start_date, "%Y-%m-%d")
+                    except ValueError:
+                        messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format for start date")
+                        return
+
+                if end_date:
+                    try:
+                        datetime.strptime(end_date, "%Y-%m-%d")
+                    except ValueError:
+                        messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format for end date")
+                        return
+
+                # Clear current records
+                for item in tree.get_children():
+                    tree.delete(item)
+
+                # Get all records
+                records = self.db.get_attendance_records()
+
+                # Apply filters
+                filtered_records = []
+                for record in records:
+                    record_date = datetime.strptime(record[0], "%Y-%m-%d")
+                    
+                    # Date range filter
+                    if start_date and record_date < datetime.strptime(start_date, "%Y-%m-%d"):
+                        continue
+                    if end_date and record_date > datetime.strptime(end_date, "%Y-%m-%d"):
+                        continue
+
+                    # Employee filter
+                    if employee != "All Employees" and record[1] != employee:
+                        continue
+
+                    # Status filter
+                    if status != "All":
+                        arrival_time = record[2] if record[2] else ""
+                        if status == "Present" and not arrival_time:
+                            continue
+                        elif status == "Absent" and arrival_time:
+                            continue
+                        elif status == "Late" and arrival_time:
+                            # Consider "late" if arrival is after 9:00 AM
+                            try:
+                                arrival_dt = datetime.strptime(arrival_time, "%H:%M:%S")
+                                if arrival_dt.time() <= datetime.strptime("09:00:00", "%H:%M:%S").time():
+                                    continue
+                            except:
+                                continue
+
+                    filtered_records.append(record)
+
+                if not filtered_records:
+                    messagebox.showinfo("No Records", "No attendance records found matching the filters")
+
+                # Display filtered records
+                for record in filtered_records:
+                    tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply filters: {str(e)}")
+
+        def clear_filters():
+            from_date.delete(0, 'end')
+            to_date.delete(0, 'end')
+            employee_var.set("All Employees")
+            status_var.set("All")
+            refresh_attendance_records(tree)
+
+        # Filter and Clear buttons
+        buttons_frame = ctk.CTkFrame(bottom_row, fg_color="transparent")
+        buttons_frame.pack(side="right")
+
+        apply_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Apply Filters",
+            command=apply_filters,
+            fg_color=self.primary_color,
+            text_color="white",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        apply_btn.pack(side="left", padx=5)
+
+        clear_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Clear Filters",
+            command=clear_filters,
+            fg_color="transparent",
+            text_color=self.text_color,
+            border_width=1,
+            border_color="#d1d1d1",
+            hover_color="#e8eaed",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        clear_btn.pack(side="left", padx=5)
+        
+        def filter_records():
+            try:
+                filter_date = date_entry.get().strip()
+                
+                # Reset filter if date is empty
+                if not filter_date:
+                    self.refresh_attendance_records(tree)
+                    return
+                    
+                # Validate date format
+                try:
+                    datetime.strptime(filter_date, "%Y-%m-%d")
+                except ValueError:
+                    messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format")
+                    return
+                    
+                # Clear current records
+                for item in tree.get_children():
+                    tree.delete(item)
+                    
+                # Filter and display matching records
+                records = self.db.get_attendance_records()
+                filtered = [r for r in records if r[0] == filter_date]
+                
+                if not filtered:
+                    messagebox.showinfo("No Records", "No attendance records found for this date")
+                
+                for record in filtered:
+                    tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
+                    
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to filter records: {e}")
+        
+        def export_to_csv():
+            try:
+                # Get currently displayed records (filtered or all)
+                records_to_export = []
+                for item in tree.get_children():
+                    values = tree.item(item)['values']
+                    records_to_export.append(values)
+                
+                if not records_to_export:
+                    messagebox.showinfo("No Data", "No records to export")
+                
+                if not records:
+                    messagebox.showinfo("No Data", "No records to export")
+                    return
+                
+                # Ask user where to save the file
+                filename = f"attendance_{'_' + filter_date if filter_date else ''}.csv"
+                import tkinter.filedialog as fd
+                file_path = fd.asksaveasfilename(
+                    defaultextension=".csv",
+                    initialfile=filename,
+                    filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+                )
+                
+                if not file_path:  # User cancelled
+                    return
+                    
+                # Write CSV file
+                import csv
+                with open(file_path, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["Date", "Employee Name", "Arrival Time", "Departure Time"])
+                    writer.writerows(records)
+                    
+                messagebox.showinfo("Success", f"Records exported to {file_path}")
+                
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to export records: {e}")
         
         filter_btn = ctk.CTkButton(
             filter_frame, 
             text="Filter", 
-            command=lambda: None,  # Placeholder for filter functionality
+            command=filter_records,
             fg_color=self.primary_color,
             text_color="white",
             width=100,
@@ -1273,10 +1860,26 @@ class AdminDashboard:
         )
         filter_btn.pack(side="left", padx=10)
         
+        # Export button
+        export_btn = ctk.CTkButton(
+            filter_frame,
+            text="Export Data",
+            command=export_to_csv,
+            fg_color="transparent",
+            text_color=self.primary_color,
+            border_width=1,
+            border_color=self.primary_color,
+            hover_color="#e8eaed",
+            width=120,
+            height=36,
+            corner_radius=5
+        )
+        export_btn.pack(side="right", padx=20)
+        
         export_btn = ctk.CTkButton(
             filter_frame, 
             text="Export CSV", 
-            command=lambda: None,  # Placeholder for export functionality
+            command=export_to_csv,
             fg_color="transparent",
             text_color=self.primary_color,
             border_width=1,
@@ -1306,14 +1909,50 @@ class AdminDashboard:
         # Use ttk.Treeview for the table
         columns = ("date", "name", "arrival", "departure")
         tree = ttk.Treeview(records_frame, columns=columns, show="headings", style="Treeview")
-        tree.heading("date", text="Date")
-        tree.heading("name", text="Employee Name")
-        tree.heading("arrival", text="Arrival")
-        tree.heading("departure", text="Departure")
-        tree.column("date", width=120)
-        tree.column("name", width=220)
-        tree.column("arrival", width=120)
-        tree.column("departure", width=120)
+        
+        # Configure sorting
+        self.sort_states = {col: False for col in columns}  # False = ascending, True = descending
+        
+        def sort_column(col):
+            # Get all items
+            items = [(tree.set(item, col), item) for item in tree.get_children("")]
+            
+            # Determine sort method based on column
+            if col == "date":
+                # Sort dates
+                items.sort(key=lambda x: (x[0] is None or x[0] == "", x[0]), reverse=self.sort_states[col])
+            elif col in ["arrival", "departure"]:
+                # Sort times, handling empty values
+                items.sort(key=lambda x: (x[0] is None or x[0] == "", x[0]), reverse=self.sort_states[col])
+            else:
+                # Regular string sort
+                items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=self.sort_states[col])
+            
+            # Rearrange items
+            for idx, (_, item) in enumerate(items):
+                tree.move(item, "", idx)
+            
+            # Toggle sort state
+            self.sort_states[col] = not self.sort_states[col]
+            
+            # Update column headers to show sort direction
+            for c in columns:
+                if c == col:
+                    direction = "↓" if self.sort_states[c] else "↑"
+                    tree.heading(c, text=f"{c.title()} {direction}", command=lambda _c=c: sort_column(_c))
+                else:
+                    tree.heading(c, text=c.title(), command=lambda _c=c: sort_column(_c))
+        
+        # Set up column headings with sort functionality
+        tree.heading("date", text="Date", command=lambda: sort_column("date"))
+        tree.heading("name", text="Employee Name", command=lambda: sort_column("name"))
+        tree.heading("arrival", text="Arrival", command=lambda: sort_column("arrival"))
+        tree.heading("departure", text="Departure", command=lambda: sort_column("departure"))
+        
+        tree.column("date", width=120, minwidth=100)
+        tree.column("name", width=220, minwidth=150)
+        tree.column("arrival", width=120, minwidth=100)
+        tree.column("departure", width=120, minwidth=100)
         
         # Add a scrollbar
         scrollbar = ttk.Scrollbar(records_frame, orient="vertical", command=tree.yview)
@@ -1321,7 +1960,12 @@ class AdminDashboard:
         scrollbar.pack(side="right", fill="y")
         tree.pack(expand=True, fill="both", padx=20, pady=20)
         
-        # Insert records
-        for record in records:
-            # record is (date, name, arrival_time, departure_time)
-            tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
+        def refresh_attendance_records(tree):
+            for item in tree.get_children():
+                tree.delete(item)
+            records = self.db.get_attendance_records()
+            for record in records:
+                tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
+        
+        # Initial load
+        refresh_attendance_records(tree)

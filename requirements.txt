@@ -3,3 +3,6 @@ firebase-admin
 pillow
 opencv-python
 python-dateutil
+pandas
+openpyxl
+tkcalendar
