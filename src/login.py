@@ -102,6 +102,88 @@ class LoginScreen:
         )
         self.note_label.pack(pady=(20, 0))
         
+    def show_password_change(self, user_id, current_password, first_login=False):
+        """Show password change dialog."""
+        change_window = ctk.CTkToplevel(self.root)
+        change_window.title("Change Password")
+        change_window.geometry("400x300")
+        
+        title = "Change Password" if not first_login else "First Login - Change Password"
+        header = ctk.CTkLabel(
+            change_window,
+            text=title,
+            font=("Roboto", 18, "bold"),
+            text_color=self.text_color
+        )
+        header.pack(pady=(20, 30))
+        
+        if first_login:
+            msg = ctk.CTkLabel(
+                change_window,
+                text="You must change your password before continuing.",
+                font=("Roboto", 12),
+                text_color="#757575"
+            )
+            msg.pack(pady=(0, 20))
+        
+        # New password entry
+        new_pass = ctk.CTkEntry(
+            change_window,
+            width=280,
+            placeholder_text="Enter new password",
+            show="•"
+        )
+        new_pass.pack(pady=10)
+        
+        # Confirm password entry
+        confirm_pass = ctk.CTkEntry(
+            change_window,
+            width=280,
+            placeholder_text="Confirm new password",
+            show="•"
+        )
+        confirm_pass.pack(pady=10)
+        
+        def do_change():
+            new = new_pass.get()
+            confirm = confirm_pass.get()
+            
+            if not new or not confirm:
+                messagebox.showerror("Error", "Please fill in all fields")
+                return
+                
+            if new != confirm:
+                messagebox.showerror("Error", "Passwords do not match")
+                return
+                
+            if len(new) < 6:
+                messagebox.showerror("Error", "Password must be at least 6 characters")
+                return
+                
+            if self.db.change_password(user_id, current_password, new):
+                messagebox.showinfo("Success", "Password changed successfully")
+                change_window.destroy()
+                # If this was a first login, proceed with normal login flow
+                if first_login:
+                    self.on_login_success(user_id, self.pending_role)
+            else:
+                messagebox.showerror("Error", "Failed to change password")
+        
+        # Change button
+        change_btn = ctk.CTkButton(
+            change_window,
+            text="Change Password",
+            command=do_change,
+            width=200
+        )
+        change_btn.pack(pady=20)
+        
+        # Don't allow closing window on first login
+        if first_login:
+            change_window.protocol("WM_DELETE_WINDOW", lambda: None)
+            change_window.transient(self.root)
+            change_window.grab_set()
+    
     def login(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
@@ -110,10 +192,16 @@ class LoginScreen:
             messagebox.showerror("Login Error", "Please enter both username and password")
             return
             
-        user = self.db.authenticate_user(username, password)
+        result = self.db.authenticate_user(username, password)
         
-        if user:
-            user_id, role = user
-            self.on_login_success(user_id, role)
+        if result:
+            user_id, role, first_login = result
+            if first_login:
+                # Store role for after password change
+                self.pending_role = role
+                # Show forced password change dialog
+                self.show_password_change(user_id, password, first_login=True)
+            else:
+                self.on_login_success(user_id, role)
         else:
             messagebox.showerror("Login Error", "Invalid username or password")

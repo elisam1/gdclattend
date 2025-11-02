@@ -3,15 +3,19 @@ from tkinter import messagebox, ttk
 from datetime import datetime
 import os
 from PIL import Image, ImageTk
+from .permissions import Permissions
 
 # Placeholder for real fingerprint SDK
 # from fingerprint_sdk import FingerprintScanner
 
 class AdminDashboard:
-    def __init__(self, root, db, firebase=None):
+    def __init__(self, root, db, firebase=None, user_id=None, role=None, on_logout=None):
         self.root = root
         self.db = db
         self.firebase = firebase
+        self.user_id = user_id
+        self.role = role
+        self.on_logout = on_logout
         
         # Set the appearance mode and default color theme
         ctk.set_appearance_mode("system")  # Options: "system" (default), "light", "dark"
@@ -89,6 +93,34 @@ class AdminDashboard:
         self.btn_view_employee = self.create_nav_button("👥 View Employees", self.show_view_employees)
         self.btn_mark_attendance = self.create_nav_button("🖐️ Mark Attendance", self.show_mark_attendance)
         self.btn_view_attendance = self.create_nav_button("📋 Attendance Records", self.show_attendance_records)
+        self.btn_user_management = self.create_nav_button("👤 User Management", self.show_user_management)
+        self.btn_settings = self.create_nav_button("⚙️ Settings", self.show_settings)
+        # change password button in header
+        self.change_pw_btn = ctk.CTkButton(
+            self.header,
+            text="Change Password",
+            command=lambda: self.show_change_password_dialog(),
+            fg_color="transparent",
+            text_color="white",
+            hover_color="#1967d2",
+            width=140,
+            height=32,
+            corner_radius=6
+        )
+        self.change_pw_btn.pack(side="right", padx=10, pady=10)
+        # Logout button (right of header)
+        self.logout_btn = ctk.CTkButton(
+            self.header,
+            text="Logout",
+            command=self.logout,
+            fg_color="transparent",
+            text_color="white",
+            hover_color="#c62828",
+            width=100,
+            height=32,
+            corner_radius=6
+        )
+        self.logout_btn.pack(side="right", padx=(0, 10), pady=10)
         
         # Main content area
         self.main_frame = ctk.CTkFrame(self.content, corner_radius=15, fg_color="white")
@@ -107,7 +139,19 @@ class AdminDashboard:
         self.footer_label.pack(side="right", padx=20)
         
         self.current_frame = None
+        # Configure UI based on permissions if role provided
+        if self.role:
+            self.configure_permissions()
         self.show_dashboard()
+
+        # Start autosave timer based on settings (if enabled)
+        try:
+            auto_on_logout = int(self.db.get_setting('auto_save_on_logout', '1'))
+            interval = int(self.db.get_setting('auto_save_interval', '60'))
+            if auto_on_logout and interval > 0:
+                self.start_autosave_timer(interval)
+        except Exception:
+            pass
         
     def create_nav_button(self, text, command):
         """Create a styled navigation button with hover effect"""
@@ -128,11 +172,11 @@ class AdminDashboard:
         
     def nav_button_click(self, text, command):
         """Handle navigation button click and highlight active button"""
-        # Reset all buttons
-        for btn in [self.btn_dashboard, self.btn_add_employee, self.btn_view_employee, 
-                   self.btn_mark_attendance, self.btn_view_attendance]:
+        # Reset all buttons (include user management)
+        for btn in [self.btn_dashboard, self.btn_add_employee, self.btn_view_employee,
+                   self.btn_mark_attendance, self.btn_view_attendance, self.btn_user_management, self.btn_settings]:
             btn.configure(fg_color="transparent", text_color=self.text_color)
-            
+
         # Highlight active button
         if text == "🏠 Dashboard":
             self.btn_dashboard.configure(fg_color=self.primary_color, text_color="white")
@@ -144,10 +188,429 @@ class AdminDashboard:
             self.btn_mark_attendance.configure(fg_color=self.primary_color, text_color="white")
         elif text == "📋 Attendance Records":
             self.btn_view_attendance.configure(fg_color=self.primary_color, text_color="white")
-            
+        elif text == "👤 User Management":
+            self.btn_user_management.configure(fg_color=self.primary_color, text_color="white")
+        elif text == "⚙️ Settings":
+            self.btn_settings.configure(fg_color=self.primary_color, text_color="white")
+
         # Execute the command
         command()
 
+    def configure_permissions(self):
+        """Hide or show sidebar buttons depending on the logged-in user's role."""
+        role = self.role or 'staff'
+        # add_employee
+        if not Permissions.check_permission(role, 'add_employee'):
+            self.btn_add_employee.pack_forget()
+        else:
+            if not self.btn_add_employee.winfo_ismapped():
+                self.btn_add_employee.pack(fill="x", padx=10, pady=5)
+
+        # view_employees
+        if not Permissions.check_permission(role, 'view_employees'):
+            self.btn_view_employee.pack_forget()
+        else:
+            if not self.btn_view_employee.winfo_ismapped():
+                self.btn_view_employee.pack(fill="x", padx=10, pady=5)
+
+        # mark_attendance
+        if not Permissions.check_permission(role, 'mark_attendance'):
+            self.btn_mark_attendance.pack_forget()
+        else:
+            if not self.btn_mark_attendance.winfo_ismapped():
+                self.btn_mark_attendance.pack(fill="x", padx=10, pady=5)
+
+        # view_attendance
+        if not Permissions.check_permission(role, 'view_attendance'):
+            self.btn_view_attendance.pack_forget()
+        else:
+            if not self.btn_view_attendance.winfo_ismapped():
+                self.btn_view_attendance.pack(fill="x", padx=10, pady=5)
+
+        # manage_users
+        if not Permissions.check_permission(role, 'manage_users'):
+            self.btn_user_management.pack_forget()
+        else:
+            if not self.btn_user_management.winfo_ismapped():
+                self.btn_user_management.pack(fill="x", padx=10, pady=5)
+
+    def show_change_password_dialog(self):
+        """Show change password dialog for current user."""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Change Password")
+        dialog.geometry("400x300")
+
+        # Header
+        header = ctk.CTkLabel(
+            dialog,
+            text="Change Your Password",
+            font=("Segoe UI", 18, "bold"),
+            text_color=self.primary_color
+        )
+        header.pack(pady=(20, 30))
+
+        # Password fields
+        fields_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        fields_frame.pack(fill="x", padx=40)
+
+        old_pass = ctk.CTkEntry(
+            fields_frame,
+            placeholder_text="Current password",
+            show="•",
+            width=320,
+            height=40
+        )
+        old_pass.pack(pady=10)
+
+        new_pass = ctk.CTkEntry(
+            fields_frame,
+            placeholder_text="New password",
+            show="•",
+            width=320,
+            height=40
+        )
+        new_pass.pack(pady=10)
+
+        confirm_pass = ctk.CTkEntry(
+            fields_frame,
+            placeholder_text="Confirm new password",
+            show="•",
+            width=320,
+            height=40
+        )
+        confirm_pass.pack(pady=10)
+
+        def do_change():
+            old = old_pass.get()
+            new = new_pass.get()
+            confirm = confirm_pass.get()
+
+            if not old or not new or not confirm:
+                messagebox.showerror("Error", "Please fill in all fields")
+                return
+
+            if new != confirm:
+                messagebox.showerror("Error", "New passwords do not match")
+                return
+            
+            if len(new) < 6:
+                messagebox.showerror("Error", "Password must be at least 6 characters")
+                return
+
+            # Attempt to change password via DB which validates the old password
+            if self.db.change_password(self.user_id, old, new):
+                messagebox.showinfo("Success", "Password changed successfully")
+                dialog.destroy()
+            else:
+                messagebox.showerror("Error", "Failed to change password")
+
+        # Change button
+        change_btn = ctk.CTkButton(
+            dialog,
+            text="Change Password",
+            command=do_change,
+            fg_color=self.primary_color,
+            width=200,
+            height=40
+        )
+        change_btn.pack(pady=20)
+
+    def show_user_management(self):
+        """Show user management screen."""
+        self.clear_main_frame()
+        self.current_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
+
+        self.create_page_header("User Management", "Manage system users and roles")
+
+        # Add user section
+        add_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
+        add_frame.pack(fill="x", pady=(0, 20))
+
+        add_header = ctk.CTkLabel(
+            add_frame,
+            text="Add New User",
+            font=("Segoe UI", 16, "bold"),
+            text_color=self.text_color
+        )
+        add_header.pack(anchor="w", padx=20, pady=15)
+
+        fields_frame = ctk.CTkFrame(add_frame, fg_color="transparent")
+        fields_frame.pack(fill="x", padx=20, pady=(0, 20))
+
+        # Username field
+        username_label = ctk.CTkLabel(fields_frame, text="Username:", anchor="w")
+        username_label.grid(row=0, column=0, padx=5, pady=5)
+        username_entry = ctk.CTkEntry(fields_frame, width=200)
+        username_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        # Password field
+        password_label = ctk.CTkLabel(fields_frame, text="Initial Password:", anchor="w")
+        password_label.grid(row=0, column=2, padx=5, pady=5)
+        password_entry = ctk.CTkEntry(fields_frame, width=200, show="•")
+        password_entry.grid(row=0, column=3, padx=5, pady=5)
+
+        # Role selection
+        role_label = ctk.CTkLabel(fields_frame, text="Role:", anchor="w")
+        role_label.grid(row=1, column=0, padx=5, pady=5)
+        role_var = ctk.StringVar(value="staff")
+        role_menu = ctk.CTkOptionMenu(
+            fields_frame,
+            values=["staff", "manager"],
+            variable=role_var,
+            width=200
+        )
+        role_menu.grid(row=1, column=1, padx=5, pady=5)
+
+        def add_user():
+            username = username_entry.get()
+            password = password_entry.get()
+            role = role_var.get()
+
+            if not username or not password:
+                messagebox.showerror("Error", "Please fill in all fields")
+                return
+            
+            if len(password) < 6:
+                messagebox.showerror("Error", "Password must be at least 6 characters")
+                return
+
+            try:
+                self.db.add_user(username, password, role)
+                messagebox.showinfo("Success", f"User {username} created successfully")
+                username_entry.delete(0, 'end')
+                password_entry.delete(0, 'end')
+                self.refresh_user_list()
+            except Exception as e:
+                if "UNIQUE constraint" in str(e):
+                    messagebox.showerror("Error", "Username already exists")
+                else:
+                    messagebox.showerror("Error", f"Failed to create user: {e}")
+
+        add_btn = ctk.CTkButton(
+            fields_frame,
+            text="Add User",
+            command=add_user,
+            fg_color=self.primary_color
+        )
+        add_btn.grid(row=1, column=2, columnspan=2, padx=5, pady=5, sticky="ew")
+
+        # Users list
+        list_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
+        list_frame.pack(fill="both", expand=True)
+
+        list_header = ctk.CTkLabel(
+            list_frame,
+            text="Existing Users",
+            font=("Segoe UI", 16, "bold"),
+            text_color=self.text_color
+        )
+        list_header.pack(anchor="w", padx=20, pady=15)
+
+        # Treeview for users
+        columns = ("username", "role", "employee", "status", "actions")
+        tree = ttk.Treeview(list_frame, columns=columns, show="headings", style="Treeview")
+
+        tree.heading("username", text="Username")
+        tree.heading("role", text="Role")
+        tree.heading("employee", text="Linked Employee")
+        tree.heading("status", text="Status")
+        tree.heading("actions", text="Actions")
+
+        tree.column("username", width=150)
+        tree.column("role", width=100)
+        tree.column("employee", width=200)
+        tree.column("status", width=100)
+        tree.column("actions", width=100)
+
+        def refresh_user_list():
+            for item in tree.get_children():
+                tree.delete(item)
+                
+            users = self.db.get_all_users()
+            for user in users:
+                status = "First Login" if user['first_login'] else "Active"
+                # Use the database user id as the tree item id (iid) so actions can reference it
+                tree.insert("", "end", iid=str(user['id']), values=(
+                    user['username'],
+                    user['role'],
+                    user['employee_name'] or "-",
+                    status,
+                    "Delete"
+                ))
+
+        def on_tree_click(event):
+            region = tree.identify("region", event.x, event.y)
+            if region == "cell":
+                column = tree.identify_column(event.x)
+                item = tree.identify_row(event.y)
+                if column == "#5":  # Actions column
+                    if not item:
+                        return
+                    username = tree.item(item)['values'][0]
+                    if messagebox.askyesno("Confirm Delete", f"Delete user {username}?"):
+                        row_id = int(item)
+                        if self.db.delete_user(row_id):
+                            refresh_user_list()
+                            messagebox.showinfo("Success", "User deleted")
+                        else:
+                            messagebox.showerror("Error", "Failed to delete user")
+
+        tree.bind('<Button-1>', on_tree_click)
+        tree.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        # Store refresh function
+        self.refresh_user_list = refresh_user_list
+
+        # Initial load
+        refresh_user_list()
+
+    def show_settings(self):
+        """Show settings page where admin can configure autosave and logout confirmation."""
+        self.clear_main_frame()
+        self.current_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
+
+        self.create_page_header("Settings", "Application settings and preferences")
+
+        content = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
+        content.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Read current settings from DB
+        auto_on_logout = int(self.db.get_setting('auto_save_on_logout', '1'))
+        auto_interval = int(self.db.get_setting('auto_save_interval', '60'))
+        confirm_logout = int(self.db.get_setting('confirm_logout', '1'))
+
+        # Controls
+        controls = ctk.CTkFrame(content, fg_color="transparent")
+        controls.pack(padx=20, pady=10, anchor="nw")
+
+        self.auto_var = ctk.IntVar(value=auto_on_logout)
+        auto_cb = ctk.CTkCheckBox(controls, text="Auto-save on logout", variable=self.auto_var)
+        auto_cb.grid(row=0, column=0, sticky="w", pady=8)
+
+        self.confirm_var = ctk.IntVar(value=confirm_logout)
+        confirm_cb = ctk.CTkCheckBox(controls, text="Confirm on logout", variable=self.confirm_var)
+        confirm_cb.grid(row=1, column=0, sticky="w", pady=8)
+
+        interval_label = ctk.CTkLabel(controls, text="Auto-save interval (seconds):")
+        interval_label.grid(row=2, column=0, sticky="w", pady=(12, 2))
+        self.interval_var = ctk.StringVar(value=str(auto_interval))
+        interval_entry = ctk.CTkEntry(controls, textvariable=self.interval_var, width=120)
+        interval_entry.grid(row=3, column=0, sticky="w", pady=4)
+
+        def save_settings():
+            try:
+                ai = int(self.interval_var.get())
+                if ai <= 0:
+                    raise ValueError
+            except Exception:
+                messagebox.showerror("Error", "Interval must be a positive integer")
+                return
+
+            self.db.set_setting('auto_save_on_logout', str(self.auto_var.get()))
+            self.db.set_setting('auto_save_interval', str(ai))
+            self.db.set_setting('confirm_logout', str(self.confirm_var.get()))
+            messagebox.showinfo("Saved", "Settings saved successfully")
+
+            # restart autosave timer according to new settings
+            if int(self.auto_var.get()):
+                self.start_autosave_timer(ai)
+            else:
+                self.stop_autosave_timer()
+
+        save_btn = ctk.CTkButton(controls, text="Save Settings", command=save_settings, fg_color=self.primary_color)
+        save_btn.grid(row=4, column=0, pady=(20, 0))
+
+    # --- Auto-save and state management ---
+    def collect_state(self):
+        """Collect a lightweight snapshot of current UI state (forms) to persist."""
+        state = {
+            'timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            'last_page': getattr(self, 'last_page', '')
+        }
+        # Known form fields
+        try:
+            if hasattr(self, 'entry_name'):
+                state['add_employee'] = {
+                    'name': self.entry_name.get(),
+                    'email': self.entry_email.get() if hasattr(self, 'entry_email') else '',
+                    'fingerprint_id': self.entry_fingerprint.get() if hasattr(self, 'entry_fingerprint') else ''
+                }
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'entry_fingerprint_scan'):
+                state['mark_attendance'] = {'fingerprint_id': self.entry_fingerprint_scan.get()}
+        except Exception:
+            pass
+
+        return state
+
+    def save_state(self):
+        """Persist the collected state to a local backup JSON file."""
+        try:
+            state = self.collect_state()
+            backups_dir = os.path.join(os.getcwd(), 'backups')
+            os.makedirs(backups_dir, exist_ok=True)
+            fname = f"state_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            path = os.path.join(backups_dir, fname)
+            import json
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+            print(f"📦 Auto-saved state to {path}")
+            return True
+        except Exception as e:
+            print("⚠️ Failed to auto-save state:", e)
+            return False
+
+    def start_autosave_timer(self, interval_seconds=60):
+        """Start a periodic autosave timer. Stops previous if running."""
+        try:
+            self.stop_autosave_timer()
+        except Exception:
+            pass
+        self._autosave_interval = max(1, int(interval_seconds))
+
+        def tick():
+            self.save_state()
+            # schedule again
+            self._autosave_id = self.root.after(self._autosave_interval * 1000, tick)
+
+        self._autosave_id = self.root.after(self._autosave_interval * 1000, tick)
+
+    def stop_autosave_timer(self):
+        try:
+            if hasattr(self, '_autosave_id') and self._autosave_id:
+                self.root.after_cancel(self._autosave_id)
+                self._autosave_id = None
+        except Exception:
+            pass
+
+    def logout(self):
+        """Logout the current user. If an on_logout callback was provided, call it.
+
+        Otherwise, clear the root window and show the login screen.
+        """
+        # Confirmation dialog
+        if not messagebox.askyesno("Confirm Logout", "Are you sure you want to logout?"):
+            return
+        if callable(self.on_logout):
+            try:
+                self.on_logout()
+                return
+            except Exception as e:
+                print("⚠️ on_logout callback failed:", e)
+
+        # Fallback: clear root children and show login screen
+        try:
+            from .login import LoginScreen
+            for w in self.root.winfo_children():
+                w.destroy()
+            LoginScreen(self.root, self.db, lambda uid, role: None)
+        except Exception as e:
+            print("⚠️ Failed to logout cleanly:", e)
     # ----------------- Utility -----------------
     def clear_main_frame(self):
         if self.current_frame:

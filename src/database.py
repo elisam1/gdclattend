@@ -37,6 +37,7 @@ class Database:
             password TEXT NOT NULL,
             role TEXT NOT NULL,
             employee_id INTEGER,
+            first_login INTEGER DEFAULT 1,
             FOREIGN KEY (employee_id) REFERENCES employees (id)
         );
         """
@@ -54,6 +55,36 @@ class Database:
         
         self.conn.commit()
 
+        # Ensure users table has 'first_login' column (migration for older DBs)
+        try:
+            cursor.execute("PRAGMA table_info(users)")
+            user_cols = [r[1] for r in cursor.fetchall()]
+            if 'first_login' not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN first_login INTEGER DEFAULT 1")
+                self.conn.commit()
+        except Exception:
+            pass
+        # Settings table for app-level configuration
+        try:
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """)
+            # insert default settings if missing
+            cursor.execute("SELECT key FROM settings WHERE key = 'auto_save_on_logout'")
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ('auto_save_on_logout', '1'))
+            cursor.execute("SELECT key FROM settings WHERE key = 'auto_save_interval'")
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ('auto_save_interval', '60'))
+            cursor.execute("SELECT key FROM settings WHERE key = 'confirm_logout'")
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ('confirm_logout', '1'))
+            self.conn.commit()
+        except Exception:
+            pass
         # Migration: if an old attendance table exists with a 'timestamp' column, migrate it
         try:
             cursor.execute("PRAGMA table_info(attendance)")
@@ -180,3 +211,71 @@ class Database:
             ORDER BY attendance.date DESC, employees.name ASC
         """)
         return cursor.fetchall()
+        
+    # --- User Management ---
+    def authenticate_user(self, username, password):
+        """Authenticate a user and return tuple (user_id, role) or None if failed."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, role, first_login FROM users WHERE username = ? AND password = ?", 
+                      (username, password))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        # sqlite3.Row may not support dict.get; handle missing column defensively
+        first_login = row['first_login'] if 'first_login' in row.keys() else 1
+        return (row['id'], row['role'], first_login)
+        
+    def add_user(self, username, password, role, employee_id=None):
+        """Add a new user with specified role."""
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO users (username, password, role, employee_id, first_login) VALUES (?, ?, ?, ?, 1)",
+                       (username, password, role, employee_id))
+        self.conn.commit()
+        
+    def change_password(self, user_id, old_password, new_password):
+        """Change a user's password, returns True if successful."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE id = ? AND password = ?", (user_id, old_password))
+        if cursor.fetchone():
+            cursor.execute("UPDATE users SET password = ?, first_login = 0 WHERE id = ?", 
+                         (new_password, user_id))
+            self.conn.commit()
+            return True
+        return False
+    
+    def get_all_users(self):
+        """Get all users except admin for user management."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT users.id, users.username, users.role, users.first_login,
+                   employees.name as employee_name
+            FROM users 
+            LEFT JOIN employees ON users.employee_id = employees.id
+            WHERE users.username != 'admin'
+            ORDER BY users.username
+        """)
+        return cursor.fetchall()
+    
+    def delete_user(self, user_id):
+        """Delete a user account."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM users WHERE id = ? AND username != 'admin'", (user_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # --- Settings helpers ---
+    def get_setting(self, key, default=None):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key, value):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        self.conn.commit()
+
+    def get_all_settings(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT key, value FROM settings")
+        return {r[0]: r[1] for r in cursor.fetchall()}
