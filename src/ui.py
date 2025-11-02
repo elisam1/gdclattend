@@ -9,6 +9,20 @@ from .permissions import Permissions
 # from fingerprint_sdk import FingerprintScanner
 
 class AdminDashboard:
+    def show_loading(self, message="Loading..."):
+        if hasattr(self, '_loading_overlay') and self._loading_overlay:
+            return  # Already showing
+        self._loading_overlay = ctk.CTkFrame(self.root, fg_color="#00000080")
+        self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        spinner = ctk.CTkLabel(self._loading_overlay, text="⏳", font=("Segoe UI", 48), text_color="white")
+        spinner.pack(expand=True, pady=(100, 10))
+        msg = ctk.CTkLabel(self._loading_overlay, text=message, font=("Segoe UI", 18), text_color="white")
+        msg.pack()
+
+    def hide_loading(self):
+        if hasattr(self, '_loading_overlay') and self._loading_overlay:
+            self._loading_overlay.destroy()
+            self._loading_overlay = None
     def __init__(self, root, db, firebase=None, user_id=None, role=None, on_logout=None):
         self.root = root
         self.db = db
@@ -32,6 +46,19 @@ class AdminDashboard:
         self.success_color = "#0f9d58"  # Green
         self.warning_color = "#f4b400"  # Yellow
         self.error_color = "#db4437"  # Red
+
+        # Define font styles for consistency
+        self.fonts = {
+            'header': ("Segoe UI", 24, "bold"),     # Page headers
+            'subheader': ("Segoe UI", 18, "bold"),  # Section headers
+            'title': ("Segoe UI", 22, "bold"),      # App title
+            'nav': ("Segoe UI", 14, "normal"),      # Navigation buttons
+            'button': ("Segoe UI", 13, "normal"),   # Regular buttons
+            'input': ("Segoe UI", 13, "normal"),    # Input fields
+            'text': ("Segoe UI", 13, "normal"),     # Regular text
+            'small': ("Segoe UI", 11, "normal"),    # Small text
+            'footer': ("Segoe UI", 10, "normal")    # Footer text
+        }
         
         # Configure style for ttk widgets
         self.style = ttk.Style()
@@ -44,20 +71,50 @@ class AdminDashboard:
         
         # Create main container
         self.container = ctk.CTkFrame(root, fg_color=self.secondary_color)
-        self.container.pack(fill="both", expand=True)
+        self.container.pack(fill="both", expand=True, padx=10, pady=10)
         
         # Header frame
         self.header = ctk.CTkFrame(self.container, height=60, corner_radius=0, fg_color=self.primary_color)
-        self.header.pack(fill="x")
+        self.header.pack(fill="x", padx=5, pady=(0, 5))
         
         # App title in header
         self.title_label = ctk.CTkLabel(
             self.header, 
             text="GDC ATTENDANCE SYSTEM", 
-            font=("Segoe UI", 22, "bold"),
+            font=self.fonts['title'],
             text_color="white"
         )
         self.title_label.pack(side="left", padx=20, pady=10)
+
+        # User avatar in header
+        self.avatar_frame = ctk.CTkFrame(
+            self.header,
+            width=40,
+            height=40,
+            corner_radius=20,
+            fg_color=self.accent_color
+        )
+        self.avatar_frame.pack(side="right", padx=(0, 20), pady=10)
+        self.avatar_frame.pack_propagate(False)
+
+        # Default avatar icon
+        self.avatar_label = ctk.CTkLabel(
+            self.avatar_frame,
+            text="👤",
+            font=("Segoe UI", 20),
+            text_color="white"
+        )
+        self.avatar_label.pack(expand=True)
+
+        # User role label
+        role_text = role.title() if role else "User"
+        self.role_label = ctk.CTkLabel(
+            self.header,
+            text=role_text,
+            font=("Segoe UI", 12),
+            text_color="white"
+        )
+        self.role_label.pack(side="right", padx=(0, 10), pady=10)
         
         # Content area (sidebar + main content)
         self.content = ctk.CTkFrame(self.container, fg_color="transparent")
@@ -65,7 +122,7 @@ class AdminDashboard:
         
         # Sidebar with gradient effect
         self.sidebar = ctk.CTkFrame(self.content, width=250, corner_radius=0, fg_color="#f1f3f4")
-        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack(side="left", fill="y", padx=(0, 10), pady=5)
         self.sidebar.pack_propagate(False)  # Prevent sidebar from shrinking
         
         # Logo or branding area
@@ -75,7 +132,7 @@ class AdminDashboard:
         self.logo_label = ctk.CTkLabel(
             self.logo_frame, 
             text="Admin Dashboard", 
-            font=("Segoe UI", 18, "bold"),
+            font=self.fonts['subheader'],
             text_color=self.primary_color
         )
         self.logo_label.pack(pady=10)
@@ -88,13 +145,13 @@ class AdminDashboard:
         self.active_btn = None
         
         # Sidebar buttons with hover effect
-        self.btn_dashboard = self.create_nav_button("🏠 Dashboard", self.show_dashboard)
-        self.btn_add_employee = self.create_nav_button("➕ Add Employee", self.show_add_employee)
-        self.btn_view_employee = self.create_nav_button("👥 View Employees", self.show_view_employees)
-        self.btn_mark_attendance = self.create_nav_button("🖐️ Mark Attendance", self.show_mark_attendance)
-        self.btn_view_attendance = self.create_nav_button("📋 Attendance Records", self.show_attendance_records)
-        self.btn_user_management = self.create_nav_button("👤 User Management", self.show_user_management)
-        self.btn_settings = self.create_nav_button("⚙️ Settings", self.show_settings)
+        self.btn_dashboard = self.create_nav_button("🏠  Dashboard", self.show_dashboard)
+        self.btn_add_employee = self.create_nav_button("➕  Add Employee", self.show_add_employee)
+        self.btn_view_employee = self.create_nav_button("👥  View Employees", self.show_view_employees)
+        self.btn_mark_attendance = self.create_nav_button("🖐️  Mark Attendance", self.show_mark_attendance)
+        self.btn_view_attendance = self.create_nav_button("📋  Attendance Records", self.show_attendance_records)
+        self.btn_user_management = self.create_nav_button("👤  User Management", self.show_user_management)
+        self.btn_settings = self.create_nav_button("⚙️  Settings", self.show_settings)
         # change password button in header
         self.change_pw_btn = ctk.CTkButton(
             self.header,
@@ -124,21 +181,32 @@ class AdminDashboard:
         
         # Main content area
         self.main_frame = ctk.CTkFrame(self.content, corner_radius=15, fg_color="white")
-        self.main_frame.pack(side="right", expand=True, fill="both", padx=20, pady=20)
+        self.main_frame.pack(side="right", expand=True, fill="both", padx=20, pady=10)
         
         # Footer
         self.footer = ctk.CTkFrame(self.container, height=30, corner_radius=0, fg_color=self.primary_color)
-        self.footer.pack(fill="x")
+        self.footer.pack(fill="x", padx=5, pady=(5, 0))
         
         self.footer_label = ctk.CTkLabel(
             self.footer, 
             text="© 2023 GDC Attendance System", 
-            font=("Segoe UI", 10),
+            font=self.fonts['footer'],
             text_color="white"
         )
         self.footer_label.pack(side="right", padx=20)
         
         self.current_frame = None
+
+        # Make UI responsive to window resizing
+        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.container.rowconfigure(1, weight=1)
+        self.container.columnconfigure(0, weight=1)
+        self.content.rowconfigure(0, weight=1)
+        self.content.columnconfigure(1, weight=1)
+        self.main_frame.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=1)
+
         # Configure UI based on permissions if role provided
         if self.role:
             self.configure_permissions()
@@ -161,12 +229,23 @@ class AdminDashboard:
             command=lambda t=text, c=command: self.nav_button_click(t, c),
             fg_color="transparent",
             text_color=self.text_color,
-            hover_color="#e8eaed",
+            hover_color=self.accent_color,
             anchor="w",
             height=40,
             corner_radius=8,
-            font=("Segoe UI", 14)
+            font=self.fonts['nav']
         )
+        
+        def on_enter(e):
+            if not btn.cget("state") == "disabled":
+                btn.configure(text_color=self.accent_color)
+                
+        def on_leave(e):
+            if not btn.cget("state") == "disabled":
+                btn.configure(text_color=self.text_color)
+        
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
         btn.pack(fill="x", padx=10, pady=5)
         return btn
         
@@ -238,47 +317,60 @@ class AdminDashboard:
         """Show change password dialog for current user."""
         dialog = ctk.CTkToplevel(self.root)
         dialog.title("Change Password")
-        dialog.geometry("400x300")
+        dialog.geometry("400x400")  # Increased height
+        
+        # Make dialog modal and place it in center
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog relative to main window
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        # Main container with padding
+        container = ctk.CTkFrame(dialog, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
 
         # Header
         header = ctk.CTkLabel(
-            dialog,
+            container,
             text="Change Your Password",
-            font=("Segoe UI", 18, "bold"),
+            font=self.fonts['subheader'],
             text_color=self.primary_color
         )
-        header.pack(pady=(20, 30))
+        header.pack(pady=(0, 20))
 
         # Password fields
-        fields_frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        fields_frame.pack(fill="x", padx=40)
+        fields_frame = ctk.CTkFrame(container, fg_color="transparent")
+        fields_frame.pack(fill="x")
 
         old_pass = ctk.CTkEntry(
             fields_frame,
             placeholder_text="Current password",
             show="•",
-            width=320,
+            width=360,
             height=40
         )
-        old_pass.pack(pady=10)
+        old_pass.pack(pady=(0, 10))
 
         new_pass = ctk.CTkEntry(
             fields_frame,
             placeholder_text="New password",
             show="•",
-            width=320,
+            width=360,
             height=40
         )
-        new_pass.pack(pady=10)
+        new_pass.pack(pady=(0, 10))
 
         confirm_pass = ctk.CTkEntry(
             fields_frame,
             placeholder_text="Confirm new password",
             show="•",
-            width=320,
+            width=360,
             height=40
         )
-        confirm_pass.pack(pady=10)
+        confirm_pass.pack(pady=(0, 20))
 
         def do_change():
             old = old_pass.get()
@@ -304,16 +396,35 @@ class AdminDashboard:
             else:
                 messagebox.showerror("Error", "Failed to change password")
 
+        # Buttons frame
+        buttons_frame = ctk.CTkFrame(container, fg_color="transparent")
+        buttons_frame.pack(fill="x", pady=(0, 10))
+
+        # Cancel button
+        cancel_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Cancel",
+            command=dialog.destroy,
+            fg_color="transparent",
+            border_width=1,
+            border_color=self.primary_color,
+            text_color=self.primary_color,
+            hover_color="#f0f0f0",
+            width=160,
+            height=40
+        )
+        cancel_btn.pack(side="left", padx=10)
+
         # Change button
         change_btn = ctk.CTkButton(
-            dialog,
+            buttons_frame,
             text="Change Password",
             command=do_change,
             fg_color=self.primary_color,
-            width=200,
+            width=160,
             height=40
         )
-        change_btn.pack(pady=20)
+        change_btn.pack(side="right", padx=10)
 
     def show_user_management(self):
         """Show user management screen."""
@@ -873,9 +984,18 @@ class AdminDashboard:
             messagebox.showwarning("Input Error", "Please fill all fields!")
             return
 
-        self.db.add_employee(name, email, fingerprint_id)
-        messagebox.showinfo("Success", f"Employee {name} added successfully!")
-        self.show_dashboard()
+        self.show_loading("Saving employee...")
+        self.root.after(100, lambda: self._save_employee_action(name, email, fingerprint_id))
+
+    def _save_employee_action(self, name, email, fingerprint_id):
+        try:
+            self.db.add_employee(name, email, fingerprint_id)
+            self.hide_loading()
+            messagebox.showinfo("Success", f"Employee {name} added successfully!")
+            self.show_dashboard()
+        except Exception as e:
+            self.hide_loading()
+            messagebox.showerror("Error", f"Failed to save employee: {e}")
 
     # ----------------- View Employees -----------------
     def show_view_employees(self):
@@ -1078,33 +1198,38 @@ class AdminDashboard:
 
     def real_scan(self):
         fingerprint_id = self.entry_fingerprint_scan.get().strip()
+        self.show_loading("Marking attendance...")
+        self.root.after(100, lambda: self._real_scan_action(fingerprint_id))
 
-        # TODO: Replace below with actual scanner SDK code
-        # scanner = FingerprintScanner()
-        # fingerprint_id = scanner.scan()
+    def _real_scan_action(self, fingerprint_id):
+        try:
+            employees = self.db.get_all_employees()
+            match = next((emp for emp in employees if emp[3] == fingerprint_id), None)
 
-        employees = self.db.get_all_employees()
-        match = next((emp for emp in employees if emp[3] == fingerprint_id), None)
+            if match:
+                emp_id = match[0]
+                name = match[1]
+                # mark arrival or departure depending on today's record
+                result = self.db.mark_arrival_or_departure(emp_id)
 
-        if match:
-            emp_id = match[0]
-            name = match[1]
-            # mark arrival or departure depending on today's record
-            result = self.db.mark_arrival_or_departure(emp_id)
+                date = result.get('date')
+                time = result.get('time')
+                action = result.get('action')
 
-            date = result.get('date')
-            time = result.get('time')
-            action = result.get('action')
+                if self.firebase:
+                    try:
+                        self.firebase.upload_attendance({"name": name, "status": action, "timestamp": f"{date} {time}"})
+                    except Exception as e:
+                        print("⚠️ Firebase upload failed:", e)
 
-            if self.firebase:
-                try:
-                    self.firebase.upload_attendance({"name": name, "status": action, "timestamp": f"{date} {time}"})
-                except Exception as e:
-                    print("⚠️ Firebase upload failed:", e)
-
-            messagebox.showinfo("Attendance Marked", f"{action.title()} recorded for {name} on {date} at {time}")
-        else:
-            messagebox.showerror("Scan Failed", "Fingerprint not recognized!")
+                self.hide_loading()
+                messagebox.showinfo("Attendance Marked", f"{action.title()} recorded for {name} on {date} at {time}")
+            else:
+                self.hide_loading()
+                messagebox.showerror("Scan Failed", "Fingerprint not recognized!")
+        except Exception as e:
+            self.hide_loading()
+            messagebox.showerror("Error", f"Failed to mark attendance: {e}")
 
     # ----------------- Attendance Records -----------------
     def show_attendance_records(self):
