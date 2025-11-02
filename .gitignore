@@ -1,0 +1,12 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+
+# Firebase service account key (sensitive)
+serviceAccountKey.json
+
+# Database
+attendance.db

@@ -626,17 +626,20 @@ class AdminDashboard:
         if match:
             emp_id = match[0]
             name = match[1]
-            self.db.mark_attendance(emp_id)
+            # mark arrival or departure depending on today's record
+            result = self.db.mark_arrival_or_departure(emp_id)
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            date = result.get('date')
+            time = result.get('time')
+            action = result.get('action')
 
             if self.firebase:
                 try:
-                    self.firebase.upload_attendance({"employee": name, "timestamp": timestamp})
+                    self.firebase.upload_attendance({"name": name, "status": action, "timestamp": f"{date} {time}"})
                 except Exception as e:
                     print("⚠️ Firebase upload failed:", e)
 
-            messagebox.showinfo("Attendance Marked", f"Attendance recorded for {name} at {timestamp}")
+            messagebox.showinfo("Attendance Marked", f"{action.title()} recorded for {name} on {date} at {time}")
         else:
             messagebox.showerror("Scan Failed", "Fingerprint not recognized!")
 
@@ -713,12 +716,16 @@ class AdminDashboard:
             return
         
         # Use ttk.Treeview for the table
-        columns = ("name", "timestamp")
+        columns = ("date", "name", "arrival", "departure")
         tree = ttk.Treeview(records_frame, columns=columns, show="headings", style="Treeview")
+        tree.heading("date", text="Date")
         tree.heading("name", text="Employee Name")
-        tree.heading("timestamp", text="Timestamp")
-        tree.column("name", width=250)
-        tree.column("timestamp", width=250)
+        tree.heading("arrival", text="Arrival")
+        tree.heading("departure", text="Departure")
+        tree.column("date", width=120)
+        tree.column("name", width=220)
+        tree.column("arrival", width=120)
+        tree.column("departure", width=120)
         
         # Add a scrollbar
         scrollbar = ttk.Scrollbar(records_frame, orient="vertical", command=tree.yview)
@@ -728,4 +735,5 @@ class AdminDashboard:
         
         # Insert records
         for record in records:
-            tree.insert("", "end", values=record)
+            # record is (date, name, arrival_time, departure_time)
+            tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
