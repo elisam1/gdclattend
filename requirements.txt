@@ -6,3 +6,5 @@ python-dateutil
 pandas
 openpyxl
 tkcalendar
+pyfingerprint
+pyserial

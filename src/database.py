@@ -14,7 +14,8 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             email TEXT,
-            fingerprint_id TEXT
+            fingerprint_id TEXT,
+            fingerprint_template BLOB
         );
         """
 
@@ -114,11 +115,12 @@ class Database:
             # If migration fails, ignore and continue with new schema
             pass
 
-    def add_employee(self, name, email, fingerprint_id):
+    def add_employee(self, name, email, fingerprint_id, fingerprint_template=None):
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO employees (name, email, fingerprint_id) VALUES (?, ?, ?)",
-                       (name, email, fingerprint_id))
+        cursor.execute("INSERT INTO employees (name, email, fingerprint_id, fingerprint_template) VALUES (?, ?, ?, ?)",
+                       (name, email, fingerprint_id, fingerprint_template))
         self.conn.commit()
+        return cursor.lastrowid  # Return the employee ID for reference
 
     # --- Attendance helpers: arrival/departure per day ---
     def _today_date(self):

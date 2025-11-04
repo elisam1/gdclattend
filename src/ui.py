@@ -5,14 +5,13 @@ import os
 from PIL import Image, ImageTk
 from .permissions import Permissions
 
-# Placeholder for real fingerprint SDK
-# from fingerprint_sdk import FingerprintScanner
+from .fingerprint_scanner import FingerprintScanner
 
 class AdminDashboard:
     def show_loading(self, message="Loading..."):
         if hasattr(self, '_loading_overlay') and self._loading_overlay:
             return  # Already showing
-        self._loading_overlay = ctk.CTkFrame(self.root, fg_color="#00000080")
+        self._loading_overlay = ctk.CTkFrame(self.root, fg_color="#000000")
         self._loading_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         spinner = ctk.CTkLabel(self._loading_overlay, text="⏳", font=("Segoe UI", 48), text_color="white")
         spinner.pack(expand=True, pady=(100, 10))
@@ -629,6 +628,42 @@ class AdminDashboard:
         )
         theme_menu.pack(side="left")
 
+        # Fingerprint Scanner Settings
+        scanner_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        scanner_frame.grid(row=6, column=0, sticky="w", pady=(20, 0))
+
+        scanner_label = ctk.CTkLabel(scanner_frame, text="Fingerprint Scanner:", anchor="w")
+        scanner_label.pack(side="left", padx=(0, 10))
+
+        # Get available devices
+        from .fingerprint_scanner import FingerprintScanner
+        available_devices = FingerprintScanner.get_available_devices()
+        device_options = ["None"] + [f"{d['port']} - {d['description']}" for d in available_devices]
+
+        self.scanner_var = ctk.StringVar(value=self.db.get_setting('scanner_port', 'None'))
+        scanner_menu = ctk.CTkOptionMenu(
+            scanner_frame,
+            values=device_options,
+            variable=self.scanner_var,
+            width=200,
+            command=self.test_scanner_connection
+        )
+        scanner_menu.pack(side="left")
+
+        # Test connection button
+        test_btn = ctk.CTkButton(
+            scanner_frame,
+            text="Test",
+            command=lambda: self.test_scanner_connection(self.scanner_var.get()),
+            fg_color="transparent",
+            text_color=self.primary_color,
+            border_width=1,
+            border_color=self.primary_color,
+            hover_color="#e8eaed",
+            width=60
+        )
+        test_btn.pack(side="left", padx=(10, 0))
+
         def save_settings():
             try:
                 ai = int(self.interval_var.get())
@@ -642,6 +677,7 @@ class AdminDashboard:
             self.db.set_setting('auto_save_interval', str(ai))
             self.db.set_setting('confirm_logout', str(self.confirm_var.get()))
             self.db.set_setting('theme_mode', self.theme_var.get())
+            self.db.set_setting('scanner_port', self.scanner_var.get())
             messagebox.showinfo("Saved", "Settings saved successfully")
 
             # restart autosave timer according to new settings
@@ -651,7 +687,7 @@ class AdminDashboard:
                 self.stop_autosave_timer()
 
         save_btn = ctk.CTkButton(controls, text="Save Settings", command=save_settings, fg_color=self.primary_color)
-        save_btn.grid(row=5, column=0, pady=(20, 0))
+        save_btn.grid(row=7, column=0, pady=(20, 0))
 
     # --- Auto-save and state management ---
     def collect_state(self):
@@ -723,6 +759,25 @@ class AdminDashboard:
         """Change the application theme mode."""
         ctk.set_appearance_mode(mode.lower())
         self.db.set_setting('theme_mode', mode)
+
+    def test_scanner_connection(self, port=None):
+        """Test the fingerprint scanner connection."""
+        if port is None:
+            port = self.scanner_var.get() if hasattr(self, 'scanner_var') else None
+
+        if not port or port == "None":
+            messagebox.showerror("Error", "Please select a scanner port first")
+            return
+
+        try:
+            # Try to initialize scanner with selected port
+            scanner = FingerprintScanner(port=port)
+            if scanner.test_connection():
+                messagebox.showinfo("Success", f"Scanner connected successfully on {port}")
+            else:
+                messagebox.showerror("Connection Failed", f"Could not connect to scanner on {port}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to test scanner: {str(e)}")
 
     def logout(self):
         """Logout the current user. If an on_logout callback was provided, call it.
@@ -1776,39 +1831,6 @@ class AdminDashboard:
         )
         clear_btn.pack(side="left", padx=5)
         
-        def filter_records():
-            try:
-                filter_date = date_entry.get().strip()
-                
-                # Reset filter if date is empty
-                if not filter_date:
-                    self.refresh_attendance_records(tree)
-                    return
-                    
-                # Validate date format
-                try:
-                    datetime.strptime(filter_date, "%Y-%m-%d")
-                except ValueError:
-                    messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format")
-                    return
-                    
-                # Clear current records
-                for item in tree.get_children():
-                    tree.delete(item)
-                    
-                # Filter and display matching records
-                records = self.db.get_attendance_records()
-                filtered = [r for r in records if r[0] == filter_date]
-                
-                if not filtered:
-                    messagebox.showinfo("No Records", "No attendance records found for this date")
-                
-                for record in filtered:
-                    tree.insert("", "end", values=(record[0], record[1], record[2] or "", record[3] or ""))
-                    
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to filter records: {e}")
-        
         def export_to_csv():
             try:
                 # Get currently displayed records (filtered or all)
@@ -1816,69 +1838,40 @@ class AdminDashboard:
                 for item in tree.get_children():
                     values = tree.item(item)['values']
                     records_to_export.append(values)
-                
+
                 if not records_to_export:
                     messagebox.showinfo("No Data", "No records to export")
-                
-                if not records:
-                    messagebox.showinfo("No Data", "No records to export")
                     return
-                
+
                 # Ask user where to save the file
-                filename = f"attendance_{'_' + filter_date if filter_date else ''}.csv"
+                current_date = datetime.now().strftime("%Y%m%d")
+                filename = f"attendance_{current_date}.csv"
                 import tkinter.filedialog as fd
                 file_path = fd.asksaveasfilename(
                     defaultextension=".csv",
                     initialfile=filename,
                     filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
                 )
-                
+
                 if not file_path:  # User cancelled
                     return
-                    
+
                 # Write CSV file
                 import csv
                 with open(file_path, 'w', newline='') as f:
                     writer = csv.writer(f)
                     writer.writerow(["Date", "Employee Name", "Arrival Time", "Departure Time"])
-                    writer.writerows(records)
-                    
+                    writer.writerows(records_to_export)
+
                 messagebox.showinfo("Success", f"Records exported to {file_path}")
-                
+
             except Exception as e:
                 messagebox.showerror("Export Error", f"Failed to export records: {e}")
-        
-        filter_btn = ctk.CTkButton(
-            filter_frame, 
-            text="Filter", 
-            command=filter_records,
-            fg_color=self.primary_color,
-            text_color="white",
-            width=100,
-            height=36,
-            corner_radius=5
-        )
-        filter_btn.pack(side="left", padx=10)
-        
+
         # Export button
         export_btn = ctk.CTkButton(
             filter_frame,
             text="Export Data",
-            command=export_to_csv,
-            fg_color="transparent",
-            text_color=self.primary_color,
-            border_width=1,
-            border_color=self.primary_color,
-            hover_color="#e8eaed",
-            width=120,
-            height=36,
-            corner_radius=5
-        )
-        export_btn.pack(side="right", padx=20)
-        
-        export_btn = ctk.CTkButton(
-            filter_frame, 
-            text="Export CSV", 
             command=export_to_csv,
             fg_color="transparent",
             text_color=self.primary_color,

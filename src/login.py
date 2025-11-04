@@ -96,7 +96,7 @@ class LoginScreen:
         # Default credentials note
         self.note_label = ctk.CTkLabel(
             self.form_frame,
-            text="Default admin: username 'admin', password 'admin123'",
+            text="Default admin",
             font=("Roboto", 12),
             text_color="#757575"
         )
