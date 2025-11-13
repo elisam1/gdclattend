@@ -8,3 +8,4 @@ openpyxl
 tkcalendar
 pyfingerprint
 pyserial
+pywin32

@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-11-13 01:12:38",
+  "last_page": "",
+  "add_employee": {
+    "name": "Elikem Agbanyo",
+    "email": "elikemagbanyo13@gmail.com",
+    "fingerprint_id": "feliagb1"
+  },
+  "mark_attendance": {
+    "fingerprint_id": ""
+  }
+}

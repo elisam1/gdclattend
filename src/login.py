@@ -96,11 +96,23 @@ class LoginScreen:
         # Default credentials note
         self.note_label = ctk.CTkLabel(
             self.form_frame,
-            text="Default admin",
+            text="Default admin: username 'admin', password 'admin123'",
             font=("Roboto", 12),
             text_color="#757575"
         )
-        self.note_label.pack(pady=(20, 0))
+        self.note_label.pack(pady=(20, 8))
+
+        # Reset admin helper
+        reset_btn = ctk.CTkButton(
+            self.form_frame,
+            text="Reset Admin",
+            command=self.reset_admin_account,
+            fg_color="#9E9E9E",
+            hover_color="#757575",
+            height=32,
+            width=140
+        )
+        reset_btn.pack(pady=(0, 0))
         
     def show_password_change(self, user_id, current_password, first_login=False):
         """Show password change dialog."""
@@ -205,3 +217,14 @@ class LoginScreen:
                 self.on_login_success(user_id, role)
         else:
             messagebox.showerror("Login Error", "Invalid username or password")
+
+    def reset_admin_account(self):
+        ok = False
+        try:
+            ok = self.db.reset_admin()
+        except Exception:
+            ok = False
+        if ok:
+            messagebox.showinfo("Admin Reset", "Admin reset complete. Use username 'admin' and password 'admin123'.")
+        else:
+            messagebox.showerror("Admin Reset", "Failed to reset admin account.")

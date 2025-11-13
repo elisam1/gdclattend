@@ -59,6 +59,15 @@ class FingerprintScanner:
                 pass
         self.connected = False
 
+    def test_connection(self):
+        """Attempt to connect and immediately disconnect to verify connectivity."""
+        ok = self.connect()
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+        return ok
+
     def enroll_fingerprint(self):
         """
         Enroll a new fingerprint.
@@ -225,7 +234,8 @@ class FingerprintScanner:
 
         for port in ports:
             # Filter for common USB serial devices that might be fingerprint scanners
-            if any(keyword in port.description.lower() for keyword in ['usb', 'serial', 'tty', 'com']):
+            description = str(getattr(port, 'description', '') or '').lower()
+            if any(keyword in description for keyword in ['usb', 'serial', 'tty', 'com']):
                 devices.append({
                     'port': port.device,
                     'description': port.description or f"Serial Port {port.device}",

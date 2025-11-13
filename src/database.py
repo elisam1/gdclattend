@@ -83,6 +83,20 @@ class Database:
             cursor.execute("SELECT key FROM settings WHERE key = 'confirm_logout'")
             if not cursor.fetchone():
                 cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ('confirm_logout', '1'))
+            # email settings defaults
+            defaults = [
+                ('email_notifications', 'false'),
+                ('smtp_server', ''),
+                ('smtp_port', '587'),
+                ('smtp_user', ''),
+                ('smtp_password', ''),
+                ('smtp_use_tls', 'true'),
+                ('smtp_use_ssl', 'false'),
+            ]
+            for k, v in defaults:
+                cursor.execute("SELECT key FROM settings WHERE key = ?", (k,))
+                if not cursor.fetchone():
+                    cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (k, v))
             self.conn.commit()
         except Exception:
             pass
@@ -114,6 +128,74 @@ class Database:
         except Exception:
             # If migration fails, ignore and continue with new schema
             pass
+
+        # Migration: handle legacy 'employee' table and missing columns
+        try:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('employee','employees')")
+            names = [r[0] for r in cursor.fetchall()]
+            if 'employee' in names and 'employees' not in names:
+                cursor.execute("ALTER TABLE employee RENAME TO employees")
+                self.conn.commit()
+            # Ensure 'email' and 'fingerprint_template' columns exist
+            cursor.execute("PRAGMA table_info(employees)")
+            ecols = [r[1] for r in cursor.fetchall()]
+            if 'email' not in ecols:
+                cursor.execute("ALTER TABLE employees ADD COLUMN email TEXT")
+            if 'fingerprint_template' not in ecols:
+                cursor.execute("ALTER TABLE employees ADD COLUMN fingerprint_template BLOB")
+            self.conn.commit()
+        except Exception:
+            pass
+
+    def reset_admin(self):
+        """Ensure a default admin user exists with username 'admin' and password 'admin123'.
+
+        If an admin user already exists, update its password to 'admin123' and set first_login=1.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = 'admin'")
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("UPDATE users SET password = ?, role = ?, first_login = 1 WHERE username = 'admin'",
+                               ('admin123', 'admin'))
+            else:
+                cursor.execute("INSERT INTO users (username, password, role, first_login) VALUES (?, ?, ?, 1)",
+                               ('admin', 'admin123', 'admin'))
+            self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    # --- App Settings helpers ---
+    def get_setting(self, key, default=None):
+        """Get a setting value by key. Returns default if missing."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else default
+        except Exception:
+            return default
+
+    def set_setting(self, key, value):
+        """Upsert a setting value."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+            self.conn.commit()
+            return True
+        except Exception:
+            try:
+                # Fallback for older SQLite without upsert syntax
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (str(value), key))
+                if cursor.rowcount == 0:
+                    cursor.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+                self.conn.commit()
+                return True
+            except Exception:
+                return False
 
     def add_employee(self, name, email, fingerprint_id, fingerprint_template=None):
         cursor = self.conn.cursor()
@@ -213,6 +295,25 @@ class Database:
             ORDER BY attendance.date DESC, employees.name ASC
         """)
         return cursor.fetchall()
+    
+    def get_today_attendance_records(self):
+        cursor = self.conn.cursor()
+        date_str = self._today_date()
+        cursor.execute("""
+            SELECT attendance.date, employees.name, attendance.arrival_time, attendance.departure_time
+            FROM attendance
+            JOIN employees ON attendance.employee_id = employees.id
+            WHERE attendance.date = ?
+            ORDER BY employees.name ASC
+        """, (date_str,))
+        return cursor.fetchall()
+    
+    def get_today_attendance_count(self):
+        cursor = self.conn.cursor()
+        date_str = self._today_date()
+        cursor.execute("SELECT COUNT(*) FROM attendance WHERE date = ?", (date_str,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
         
     # --- User Management ---
     def authenticate_user(self, username, password):
@@ -264,18 +365,6 @@ class Database:
         cursor.execute("DELETE FROM users WHERE id = ? AND username != 'admin'", (user_id,))
         self.conn.commit()
         return cursor.rowcount > 0
-
-    # --- Settings helpers ---
-    def get_setting(self, key, default=None):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        return row[0] if row else default
-
-    def set_setting(self, key, value):
-        cursor = self.conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-        self.conn.commit()
 
     def get_all_settings(self):
         cursor = self.conn.cursor()

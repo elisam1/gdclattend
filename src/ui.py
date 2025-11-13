@@ -2,10 +2,13 @@ import customtkinter as ctk
 from tkinter import messagebox, ttk
 from datetime import datetime
 import os
+import importlib.util
 from PIL import Image, ImageTk
 from .permissions import Permissions
 
 from .fingerprint_scanner import FingerprintScanner
+from .face_recognition_manager import FaceRecognitionManager
+from .email_manager import EmailManager
 
 class AdminDashboard:
     def show_loading(self, message="Loading..."):
@@ -32,7 +35,7 @@ class AdminDashboard:
         
         # Set the appearance mode and default color theme
         saved_theme = db.get_setting('theme_mode', 'System')
-        ctk.set_appearance_mode(saved_theme.lower())  # Options: "system" (default), "light", "dark"
+        ctk.set_appearance_mode(str(saved_theme).lower())  # Options: "system" (default), "light", "dark"
         ctk.set_default_color_theme("blue")  # Options: "blue" (default), "green", "dark-blue"
         
         self.root.title("GDC Attendance System")
@@ -220,6 +223,9 @@ class AdminDashboard:
                 self.start_autosave_timer(interval)
         except Exception:
             pass
+        # Initialize face and email managers
+        self.face_mgr = FaceRecognitionManager()
+        self.email_mgr = EmailManager(self.db)
         
     def create_nav_button(self, text, command):
         """Create a styled navigation button with hover effect"""
@@ -638,56 +644,137 @@ class AdminDashboard:
         # Get available devices
         from .fingerprint_scanner import FingerprintScanner
         available_devices = FingerprintScanner.get_available_devices()
-        device_options = ["None"] + [f"{d['port']} - {d['description']}" for d in available_devices]
+        saved_port = self.db.get_setting('fingerprint_port', '')
+        ports = [d['port'] for d in available_devices] or []
+        if saved_port and saved_port not in ports:
+            ports.insert(0, saved_port)
+        if not ports:
+            ports = ["None"]
 
-        self.scanner_var = ctk.StringVar(value=self.db.get_setting('scanner_port', 'None'))
+        self.scanner_var = ctk.StringVar(value=saved_port if saved_port else ports[0])
         scanner_menu = ctk.CTkOptionMenu(
             scanner_frame,
-            values=device_options,
+            values=ports,
             variable=self.scanner_var,
-            width=200,
-            command=self.test_scanner_connection
+            width=180
         )
         scanner_menu.pack(side="left")
 
-        # Test connection button
         test_btn = ctk.CTkButton(
             scanner_frame,
-            text="Test",
+            text="Test Connection",
             command=lambda: self.test_scanner_connection(self.scanner_var.get()),
-            fg_color="transparent",
-            text_color=self.primary_color,
-            border_width=1,
-            border_color=self.primary_color,
-            hover_color="#e8eaed",
-            width=60
+            width=150
         )
-        test_btn.pack(side="left", padx=(10, 0))
+        test_btn.pack(side="left", padx=10)
 
-        def save_settings():
+        # Printer selection (Windows)
+        printer_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        printer_frame.grid(row=7, column=0, sticky="w", pady=(20, 0))
+
+        printer_label = ctk.CTkLabel(printer_frame, text="Preferred Printer:", anchor="w")
+        printer_label.pack(side="left", padx=(0, 10))
+
+        printers = self._get_installed_printers()
+        saved_printer = self.db.get_setting('preferred_printer', '')
+        if saved_printer and saved_printer not in printers and saved_printer:
+            printers = [saved_printer] + printers
+        if not printers:
+            printers = ["None"]
+
+        self.printer_var = ctk.StringVar(value=saved_printer if saved_printer else printers[0])
+        printer_menu = ctk.CTkOptionMenu(
+            printer_frame,
+            values=printers,
+            variable=self.printer_var,
+            width=240
+        )
+        printer_menu.pack(side="left")
+
+        # Facial recognition settings
+        face_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        face_frame.grid(row=8, column=0, sticky="w", pady=(20, 0))
+
+        face_label = ctk.CTkLabel(face_frame, text="Facial Recognition:", anchor="w")
+        face_label.pack(side="left", padx=(0, 10))
+
+        face_enabled = self.db.get_setting('face_enabled', 'false')
+        self.face_var = ctk.StringVar(value=face_enabled)
+        face_switch = ctk.CTkSwitch(face_frame, text="Enable", variable=self.face_var, onvalue='true', offvalue='false')
+        face_switch.pack(side="left")
+
+        cams = self.face_mgr.enumerate_cameras()
+        if not cams:
+            cams = ['0']
+        saved_cam = self.db.get_setting('camera_index', '0')
+        if saved_cam and saved_cam not in cams:
+            cams.insert(0, saved_cam)
+        self.cam_var = ctk.StringVar(value=saved_cam if saved_cam else cams[0])
+        cam_menu = ctk.CTkOptionMenu(face_frame, values=cams, variable=self.cam_var, width=100)
+        cam_menu.pack(side="left", padx=(10, 0))
+
+        # Save settings button
+        save_btn = ctk.CTkButton(
+            controls,
+            text="Save Settings",
+            command=self._save_settings,
+            width=160
+        )
+        save_btn.grid(row=9, column=0, sticky="w", pady=(20, 0))
+
+    def _get_installed_printers(self):
+        """Enumerate installed printers on Windows. Fallback to empty list if unavailable."""
+        printers = []
+        try:
+            if os.name == 'nt' and importlib.util.find_spec('win32print') is not None:
+                win32print = importlib.import_module('win32print')
+                flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+                for p in win32print.EnumPrinters(flags):
+                    # Entries are tuples; name commonly at index 2
+                    name = p[2] if len(p) > 2 else None
+                    if name:
+                        printers.append(name)
+        except Exception:
+            pass
+        # Fallback: try environment default
+        default_printer = os.environ.get('PRINTER')
+        if default_printer:
+            printers.append(default_printer)
+        # Deduplicate while preserving order
+        seen = set()
+        uniq = []
+        for n in printers:
+            if n not in seen:
+                seen.add(n)
+                uniq.append(n)
+        return uniq
+
+    def _save_settings(self):
+        """Persist settings values to the database and apply changes."""
+        try:
+            # Core toggles
+            self.db.set_setting('auto_save_on_logout', int(self.auto_var.get()))
+            self.db.set_setting('confirm_logout', int(self.confirm_var.get()))
+            self.db.set_setting('auto_save_interval', int(self.interval_var.get()))
+
+            # Scanner and printer
+            self.db.set_setting('fingerprint_port', self.scanner_var.get())
+            self.db.set_setting('preferred_printer', self.printer_var.get())
+
+            # Face settings
+            self.db.set_setting('face_enabled', self.face_var.get())
+            self.db.set_setting('camera_index', self.cam_var.get())
+
+            # Apply autosave interval immediately
             try:
-                ai = int(self.interval_var.get())
-                if ai <= 0:
-                    raise ValueError
-            except Exception:
-                messagebox.showerror("Error", "Interval must be a positive integer")
-                return
-
-            self.db.set_setting('auto_save_on_logout', str(self.auto_var.get()))
-            self.db.set_setting('auto_save_interval', str(ai))
-            self.db.set_setting('confirm_logout', str(self.confirm_var.get()))
-            self.db.set_setting('theme_mode', self.theme_var.get())
-            self.db.set_setting('scanner_port', self.scanner_var.get())
-            messagebox.showinfo("Saved", "Settings saved successfully")
-
-            # restart autosave timer according to new settings
-            if int(self.auto_var.get()):
-                self.start_autosave_timer(ai)
-            else:
                 self.stop_autosave_timer()
+            except Exception:
+                pass
+            self.start_autosave_timer(int(self.interval_var.get()))
 
-        save_btn = ctk.CTkButton(controls, text="Save Settings", command=save_settings, fg_color=self.primary_color)
-        save_btn.grid(row=7, column=0, pady=(20, 0))
+            messagebox.showinfo("Settings", "Settings saved successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
 
     # --- Auto-save and state management ---
     def collect_state(self):
@@ -757,8 +844,8 @@ class AdminDashboard:
 
     def change_theme_mode(self, mode):
         """Change the application theme mode."""
-        ctk.set_appearance_mode(mode.lower())
-        self.db.set_setting('theme_mode', mode)
+        ctk.set_appearance_mode(str(mode).lower())
+        self.db.set_setting('theme_mode', str(mode))
 
     def test_scanner_connection(self, port=None):
         """Test the fingerprint scanner connection."""
@@ -851,9 +938,11 @@ class AdminDashboard:
         count = len(self.db.get_all_employees())
         self.create_stat_card(stats_frame, "Total Employees", count, "👥", self.primary_color, 0)
         
-        # Today's attendance card
-        # This is a placeholder - you would need to implement the actual count
-        today_count = len(self.db.get_attendance_records()) # This should be filtered for today
+        # Today's attendance card (filtered for today)
+        try:
+            today_count = int(self.db.get_today_attendance_count())
+        except Exception:
+            today_count = 0
         self.create_stat_card(stats_frame, "Today's Attendance", today_count, "📊", self.success_color, 1)
         
         # Absent employees card
@@ -874,7 +963,10 @@ class AdminDashboard:
         activity_header.pack(anchor="w", padx=20, pady=15)
         
         # Recent attendance records
-        records = self.db.get_attendance_records()
+        try:
+            records = self.db.get_today_attendance_records()
+        except Exception:
+            records = []
         if not records:
             empty_label = ctk.CTkLabel(
                 activity_frame, 
@@ -893,15 +985,21 @@ class AdminDashboard:
                 
                 name_label = ctk.CTkLabel(
                     record_frame, 
-                    text=record[0], 
+                    text=f"{record['name']} — {record['date']}", 
                     font=("Segoe UI", 14, "bold"),
                     text_color=self.text_color
                 )
                 name_label.pack(side="left", padx=15, pady=10)
-                
+
+                times = []
+                if record['arrival_time']:
+                    times.append(f"Arrived {record['arrival_time']}")
+                if record['departure_time']:
+                    times.append(f"Left {record['departure_time']}")
+                time_text = ",  ".join(times) if times else "No timestamps"
                 time_label = ctk.CTkLabel(
                     record_frame, 
-                    text=record[1], 
+                    text=time_text, 
                     font=("Segoe UI", 12),
                     text_color="#757575"
                 )
@@ -1042,6 +1140,32 @@ class AdminDashboard:
         )
         cancel_btn.pack(side="left", padx=(0, 10))
         
+        enroll_fp_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Enroll Fingerprint",
+            command=self.enroll_fingerprint_for_new_employee,
+            fg_color=self.success_color,
+            text_color="white",
+            hover_color="#0b8043",
+            width=160,
+            height=40,
+            corner_radius=5
+        )
+        enroll_fp_btn.pack(side="left")
+
+        enroll_face_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Enroll Face",
+            command=self.enroll_face_for_new_employee,
+            fg_color=self.primary_color,
+            text_color="white",
+            hover_color=self.accent_color,
+            width=140,
+            height=40,
+            corner_radius=5
+        )
+        enroll_face_btn.pack(side="left", padx=(10, 10))
+
         save_btn = ctk.CTkButton(
             buttons_frame, 
             text="Save Employee", 
@@ -1069,13 +1193,76 @@ class AdminDashboard:
 
     def _save_employee_action(self, name, email, fingerprint_id):
         try:
-            self.db.add_employee(name, email, fingerprint_id)
+            tpl = getattr(self, 'enrolled_template', None)
+            new_id = self.db.add_employee(name, email, fingerprint_id, fingerprint_template=tpl)
+            # If face is enabled, try to capture and link immediately
+            try:
+                if self.db.get_setting('face_enabled', 'false') == 'true':
+                    cam_idx = int(self.db.get_setting('camera_index', '0'))
+                    self.face_mgr.enroll_face(employee_id=new_id, camera_index=cam_idx)
+            except Exception:
+                pass
+            # Notify employee via email if enabled
+            try:
+                if email:
+                    self.email_mgr.send_email(
+                        to_address=email,
+                        subject="Welcome to GDC Attendance",
+                        body=f"Hello {name}, your details have been added. Your fingerprint ID is {fingerprint_id}."
+                    )
+            except Exception:
+                pass
+            # reset cached template after save
+            try:
+                self.enrolled_template = None
+            except Exception:
+                pass
             self.hide_loading()
             messagebox.showinfo("Success", f"Employee {name} added successfully!")
             self.show_dashboard()
         except Exception as e:
             self.hide_loading()
             messagebox.showerror("Error", f"Failed to save employee: {e}")
+
+    def enroll_fingerprint_for_new_employee(self):
+        """Connect to scanner, enroll fingerprint, fill ID and cache template for saving."""
+        try:
+            port = self.db.get_setting('fingerprint_port', '')
+            if not port or port == 'None':
+                messagebox.showerror("Scanner", "Please select scanner port in Settings first")
+                return
+            scanner = FingerprintScanner(port=port)
+            if not scanner.connect():
+                messagebox.showerror("Scanner", "Unable to connect to scanner on selected port")
+                return
+            ok, position, template = scanner.enroll_fingerprint()
+            scanner.disconnect()
+            if ok and position is not None:
+                self.entry_fingerprint.delete(0, 'end')
+                self.entry_fingerprint.insert(0, str(position))
+                self.enrolled_template = template
+                messagebox.showinfo("Enrollment", f"Fingerprint enrolled at position {position}")
+            else:
+                messagebox.showerror("Enrollment", "Fingerprint enrollment failed or already exists")
+        except Exception as e:
+            messagebox.showerror("Enrollment", f"Error during enrollment: {e}")
+
+    def enroll_face_for_new_employee(self):
+        """Capture and store a face image for the employee using the selected camera."""
+        try:
+            # Temporarily create a fake ID to preview; actual file is saved at employee_id after save.
+            # For pre-save, we store image under a temp name and move on save if needed.
+            cam_idx = int(self.db.get_setting('camera_index', '0'))
+            # Use a temporary employee_id of 0 to capture; We'll re-capture after save if needed.
+            # Instead, simply notify user to capture after saving with Edit Employee in future.
+            # For now, capture into a temp file for verification preview.
+            ok = self.face_mgr.enroll_face(employee_id=0, camera_index=cam_idx)
+            if ok:
+                messagebox.showinfo("Face Enrollment", "Face captured. It will be linked after saving employee.")
+            else:
+                messagebox.showerror("Face Enrollment", "Unable to capture a face. Ensure lighting and camera availability.")
+        except Exception as e:
+            messagebox.showerror("Face Enrollment", f"Error capturing face: {e}")
 
     # ----------------- View Employees -----------------
     def show_view_employees(self):
@@ -1107,11 +1294,12 @@ class AdminDashboard:
             query = search_entry.get().strip().lower()
             for item in employee_tree.get_children():
                 employee_tree.delete(item)
-            
+
             for emp in employees:
-                if (query in emp[1].lower() or  # name
-                    query in emp[2].lower() or  # email
-                    query in emp[3].lower()):   # fingerprint_id
+                name = str(emp[1] or '').lower()
+                email = str(emp[2] or '').lower()
+                fid = str(emp[3] or '').lower()
+                if query in name or query in email or query in fid:
                     employee_tree.insert("", "end", values=(emp[1], emp[2], emp[3], "Edit"))
 
         search_btn = ctk.CTkButton(
@@ -1409,7 +1597,7 @@ class AdminDashboard:
             items = [(employee_tree.set(item, col), item) for item in employee_tree.get_children("")]
             
             # Regular string sort
-            items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=self.emp_sort_states[col])
+            items.sort(key=lambda x: str(x[0] or '').lower(), reverse=self.emp_sort_states[col])
             
             # Rearrange items
             for idx, (_, item) in enumerate(items):
@@ -1529,9 +1717,66 @@ class AdminDashboard:
         scan_button.pack()
 
     def real_scan(self):
-        fingerprint_id = self.entry_fingerprint_scan.get().strip()
+        # Attempt hardware scan first if a scanner port is configured
+        employee_id = None
+        fingerprint_id = None
+        scanner_error = None
+        try:
+            port = self.db.get_setting('fingerprint_port', '')
+            if port and port != 'None':
+                scanner = FingerprintScanner(port=port)
+                if scanner.connect():
+                    ok, position = scanner.verify_fingerprint()
+                    scanner.disconnect()
+                    if ok and position is not None:
+                        fingerprint_id = str(position)
+                        # Map fingerprint position to employee_id
+                        employees = self.db.get_all_employees()
+                        for emp in employees:
+                            if emp[3] and str(emp[3]) == fingerprint_id:
+                                employee_id = emp[0]
+                                break
+                else:
+                    scanner_error = "Scanner not reachable on selected port"
+        except Exception as e:
+            scanner_error = str(e)
+
+        # Facial recognition fallback if enabled and no employee match yet
+        if employee_id is None and self.db.get_setting('face_enabled', 'false') == 'true':
+            try:
+                cam_idx = int(self.db.get_setting('camera_index', '0'))
+                emp_id, score = self.face_mgr.verify_face(camera_index=cam_idx)
+                if emp_id is not None:
+                    employee_id = emp_id
+            except Exception:
+                pass
+
+        # Manual fallback: map entered fingerprint ID to employee
+        if employee_id is None:
+            manual = self.entry_fingerprint_scan.get().strip()
+            if manual:
+                try:
+                    employees = self.db.get_all_employees()
+                    for emp in employees:
+                        if emp[3] and str(emp[3]) == manual:
+                            employee_id = emp[0]
+                            break
+                except Exception:
+                    employee_id = None
+
+        if employee_id is None:
+            msg = scanner_error or "No match from scanner/face and manual input empty"
+            messagebox.showerror("Scan Failed", msg)
+            return
+
+        # Clear manual input for next day's fresh entries
+        try:
+            self.entry_fingerprint_scan.delete(0, 'end')
+        except Exception:
+            pass
+
         self.show_loading("Marking attendance...")
-        self.root.after(100, lambda: self._real_scan_action(fingerprint_id))
+        self.root.after(100, lambda: self._mark_by_employee_id(employee_id))
 
     def _real_scan_action(self, fingerprint_id):
         try:
@@ -1559,6 +1804,42 @@ class AdminDashboard:
             else:
                 self.hide_loading()
                 messagebox.showerror("Scan Failed", "Fingerprint not recognized!")
+        except Exception as e:
+            self.hide_loading()
+            messagebox.showerror("Error", f"Failed to mark attendance: {e}")
+
+    def _mark_by_employee_id(self, employee_id: int):
+        try:
+            employees = self.db.get_all_employees()
+            match = next((emp for emp in employees if int(emp[0]) == int(employee_id)), None)
+            if match:
+                emp_id = match[0]
+                name = match[1]
+                email = match[2] if len(match) > 2 else ''
+                result = self.db.mark_arrival_or_departure(emp_id)
+                date = result.get('date')
+                time = result.get('time')
+                action = result.get('action')
+                if self.firebase:
+                    try:
+                        self.firebase.upload_attendance({"name": name, "status": action, "timestamp": f"{date} {time}"})
+                    except Exception:
+                        pass
+                # Email notification
+                try:
+                    if email:
+                        self.email_mgr.send_email(
+                            to_address=email,
+                            subject=f"Attendance {action.title()} Recorded",
+                            body=f"Hello {name}, your {action} was recorded on {date} at {time}."
+                        )
+                except Exception:
+                    pass
+                self.hide_loading()
+                messagebox.showinfo("Attendance Marked", f"{action.title()} recorded for {name} on {date} at {time}")
+            else:
+                self.hide_loading()
+                messagebox.showerror("Scan Failed", "Employee not recognized!")
         except Exception as e:
             self.hide_loading()
             messagebox.showerror("Error", f"Failed to mark attendance: {e}")
@@ -1919,7 +2200,7 @@ class AdminDashboard:
                 items.sort(key=lambda x: (x[0] is None or x[0] == "", x[0]), reverse=self.sort_states[col])
             else:
                 # Regular string sort
-                items.sort(key=lambda x: x[0].lower() if x[0] else "", reverse=self.sort_states[col])
+                items.sort(key=lambda x: str(x[0] or '').lower(), reverse=self.sort_states[col])
             
             # Rearrange items
             for idx, (_, item) in enumerate(items):

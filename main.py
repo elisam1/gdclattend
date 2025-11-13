@@ -6,8 +6,11 @@ from src.login import LoginScreen
 
 print("🚀 Starting GDC Attendance App...")
 
+import os
 firebase = FirebaseManager()   # make sure this connects to real Firebase
-db = Database()
+# Prefer existing 'database.db' if present; otherwise use default 'attendance.db'
+db_path = os.path.join(os.getcwd(), "database.db")
+db = Database(db_name=db_path) if os.path.exists(db_path) else Database()
 
 root = ctk.CTk()
 
