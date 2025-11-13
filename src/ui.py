@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
 import os
 import importlib.util
@@ -722,6 +722,31 @@ class AdminDashboard:
         )
         save_btn.grid(row=9, column=0, sticky="w", pady=(20, 0))
 
+        # Backup & Restore section
+        backup_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        backup_frame.grid(row=10, column=0, sticky="w", pady=(20, 0))
+
+        backup_label = ctk.CTkLabel(backup_frame, text="Backup & Restore:", anchor="w")
+        backup_label.pack(side="left", padx=(0, 10))
+
+        backup_btn = ctk.CTkButton(
+            backup_frame,
+            text="Backup Database",
+            command=self._backup_database,
+            width=160
+        )
+        backup_btn.pack(side="left", padx=(0, 10))
+
+        restore_btn = ctk.CTkButton(
+            backup_frame,
+            text="Restore Database",
+            command=self._restore_database,
+            width=160,
+            fg_color=self.error_color,
+            hover_color="#b00020"
+        )
+        restore_btn.pack(side="left")
+
     def _get_installed_printers(self):
         """Enumerate installed printers on Windows. Fallback to empty list if unavailable."""
         printers = []
@@ -775,6 +800,48 @@ class AdminDashboard:
             messagebox.showinfo("Settings", "Settings saved successfully")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save settings: {e}")
+
+    def _backup_database(self):
+        """Backup the current database to the backups folder or chosen file."""
+        try:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            default_dir = os.path.join(os.getcwd(), 'backups')
+            os.makedirs(default_dir, exist_ok=True)
+            default_path = os.path.join(default_dir, f"database_backup_{ts}.db")
+            target = filedialog.asksaveasfilename(
+                title="Save Database Backup",
+                initialdir=default_dir,
+                initialfile=f"database_backup_{ts}.db",
+                defaultextension=".db",
+                filetypes=[("SQLite DB", "*.db"), ("All Files", "*.*")]
+            )
+            if not target:
+                return
+            ok = self.db.backup_to(target)
+            if ok:
+                messagebox.showinfo("Backup Complete", f"Database backed up to:\n{target}")
+            else:
+                messagebox.showerror("Backup Failed", "Could not create database backup.")
+        except Exception as e:
+            messagebox.showerror("Backup Failed", str(e))
+
+    def _restore_database(self):
+        """Restore database from a backup file selected by the user."""
+        try:
+            source = filedialog.askopenfilename(
+                title="Select Database Backup",
+                initialdir=os.path.join(os.getcwd(), 'backups'),
+                filetypes=[("SQLite DB", "*.db"), ("All Files", "*.*")]
+            )
+            if not source:
+                return
+            ok = self.db.restore_from(source)
+            if ok:
+                messagebox.showinfo("Restore Complete", "Database restore finished. Please restart the app.")
+            else:
+                messagebox.showerror("Restore Failed", "Could not restore database.")
+        except Exception as e:
+            messagebox.showerror("Restore Failed", str(e))
 
     # --- Auto-save and state management ---
     def collect_state(self):
@@ -929,6 +996,21 @@ class AdminDashboard:
         self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
         
         self.create_page_header("Dashboard", "Welcome to GDC Attendance System")
+
+        # Live date & time (top-right)
+        clock_frame = ctk.CTkFrame(self.current_frame, fg_color="transparent")
+        clock_frame.pack(fill="x")
+        self.dashboard_clock_label = ctk.CTkLabel(
+            clock_frame,
+            text="",
+            font=("Segoe UI", 14),
+            text_color="#757575"
+        )
+        self.dashboard_clock_label.pack(anchor="e")
+        try:
+            self._update_dashboard_clock()
+        except Exception:
+            pass
         
         # Stats cards row
         stats_frame = ctk.CTkFrame(self.current_frame, fg_color="transparent")
@@ -1004,6 +1086,17 @@ class AdminDashboard:
                     text_color="#757575"
                 )
                 time_label.pack(side="right", padx=15, pady=10)
+
+    def _update_dashboard_clock(self):
+        try:
+            now = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
+            if hasattr(self, 'dashboard_clock_label'):
+                self.dashboard_clock_label.configure(text=now)
+            # schedule next update
+            if hasattr(self, 'root'):
+                self.root.after(1000, self._update_dashboard_clock)
+        except Exception:
+            pass
     
     def create_stat_card(self, parent, title, value, icon, color, position):
         """Create a dashboard stat card"""
@@ -1665,8 +1758,8 @@ class AdminDashboard:
         content_frame = ctk.CTkFrame(self.current_frame, fg_color="white", corner_radius=10)
         content_frame.pack(fill="both", expand=True, pady=20)
         
-        # Fingerprint scan section
-        scan_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        # Scan section (scrollable to avoid hidden views on smaller windows)
+        scan_frame = ctk.CTkScrollableFrame(content_frame, fg_color="transparent")
         scan_frame.pack(expand=True, fill="both", padx=40, pady=40)
         
         # Fingerprint icon/image
@@ -1682,19 +1775,37 @@ class AdminDashboard:
         )
         icon_label.pack(expand=True)
         
+        # Scan method selector
+        mode_label = ctk.CTkLabel(
+            scan_frame,
+            text="Scan Method:",
+            font=("Segoe UI", 14),
+            text_color=self.text_color
+        )
+        mode_label.pack(anchor="w")
+
+        self.scan_mode_var = ctk.StringVar(value="Auto")
+        scan_mode = ctk.CTkSegmentedButton(
+            scan_frame,
+            values=["Auto", "Fingerprint", "Face", "Manual"],
+            variable=self.scan_mode_var,
+        )
+        scan_mode.pack(pady=(0, 20))
+
         # Instructions
         instructions = ctk.CTkLabel(
-            scan_frame, 
-            text="Place finger on scanner or enter ID below", 
+            scan_frame,
+            text="Use selected method or enter ID manually",
             font=("Segoe UI", 16),
             text_color=self.text_color
         )
         instructions.pack(pady=(0, 20))
         
         # Fingerprint ID entry
+        manual_label = ctk.CTkLabel(scan_frame, text="Manual ID (optional)", font=("Segoe UI", 13))
+        manual_label.pack(anchor="w")
         self.entry_fingerprint_scan = ctk.CTkEntry(
-            scan_frame, 
-            placeholder_text="Enter Fingerprint ID",
+            scan_frame,
             width=300,
             height=40,
             corner_radius=5
@@ -1717,32 +1828,39 @@ class AdminDashboard:
         scan_button.pack()
 
     def real_scan(self):
-        # Attempt hardware scan first if a scanner port is configured
+        # Scan behavior respects selected mode: Auto | Fingerprint | Face | Manual
         employee_id = None
         fingerprint_id = None
         scanner_error = None
+        mode = None
         try:
-            port = self.db.get_setting('fingerprint_port', '')
-            if port and port != 'None':
-                scanner = FingerprintScanner(port=port)
-                if scanner.connect():
-                    ok, position = scanner.verify_fingerprint()
-                    scanner.disconnect()
-                    if ok and position is not None:
-                        fingerprint_id = str(position)
-                        # Map fingerprint position to employee_id
-                        employees = self.db.get_all_employees()
-                        for emp in employees:
-                            if emp[3] and str(emp[3]) == fingerprint_id:
-                                employee_id = emp[0]
-                                break
-                else:
-                    scanner_error = "Scanner not reachable on selected port"
+            mode = str(self.scan_mode_var.get()) if hasattr(self, 'scan_mode_var') else 'Auto'
+        except Exception:
+            mode = 'Auto'
+        try:
+            # Fingerprint scan
+            if mode in ('Auto', 'Fingerprint'):
+                port = self.db.get_setting('fingerprint_port', '')
+                if port and port != 'None':
+                    scanner = FingerprintScanner(port=port)
+                    if scanner.connect():
+                        ok, position = scanner.verify_fingerprint()
+                        scanner.disconnect()
+                        if ok and position is not None:
+                            fingerprint_id = str(position)
+                            # Map fingerprint position to employee_id
+                            employees = self.db.get_all_employees()
+                            for emp in employees:
+                                if emp[3] and str(emp[3]) == fingerprint_id:
+                                    employee_id = emp[0]
+                                    break
+                    else:
+                        scanner_error = "Scanner not reachable on selected port"
         except Exception as e:
             scanner_error = str(e)
 
-        # Facial recognition fallback if enabled and no employee match yet
-        if employee_id is None and self.db.get_setting('face_enabled', 'false') == 'true':
+        # Facial recognition if selected (or fallback in Auto) and no match yet
+        if employee_id is None and self.db.get_setting('face_enabled', 'false') == 'true' and mode in ('Auto', 'Face'):
             try:
                 cam_idx = int(self.db.get_setting('camera_index', '0'))
                 emp_id, score = self.face_mgr.verify_face(camera_index=cam_idx)
@@ -1751,8 +1869,8 @@ class AdminDashboard:
             except Exception:
                 pass
 
-        # Manual fallback: map entered fingerprint ID to employee
-        if employee_id is None:
+        # Manual entry if selected (or fallback in Auto): map entered ID to employee
+        if employee_id is None and mode in ('Auto', 'Manual'):
             manual = self.entry_fingerprint_scan.get().strip()
             if manual:
                 try:
@@ -1765,7 +1883,14 @@ class AdminDashboard:
                     employee_id = None
 
         if employee_id is None:
-            msg = scanner_error or "No match from scanner/face and manual input empty"
+            if mode == 'Fingerprint':
+                msg = scanner_error or "Fingerprint not recognized"
+            elif mode == 'Face':
+                msg = "Face not recognized or face capture disabled"
+            elif mode == 'Manual':
+                msg = "Please enter a valid ID"
+            else:
+                msg = scanner_error or "No match from scanner/face and manual input empty"
             messagebox.showerror("Scan Failed", msg)
             return
 

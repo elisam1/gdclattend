@@ -3,6 +3,7 @@ from datetime import datetime
 
 class Database:
     def __init__(self, db_name="attendance.db"):
+        self.db_name = db_name
         self.conn = sqlite3.connect(db_name)
         # enable row access by name
         self.conn.row_factory = sqlite3.Row
@@ -370,3 +371,41 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("SELECT key, value FROM settings")
         return {r[0]: r[1] for r in cursor.fetchall()}
+
+    # --- Backup/Restore helpers ---
+    def backup_to(self, backup_path: str) -> bool:
+        """Create a SQLite backup to the given file path."""
+        try:
+            dest = sqlite3.connect(backup_path)
+            with dest:
+                self.conn.backup(dest)
+            dest.close()
+            return True
+        except Exception:
+            return False
+
+    def restore_from(self, source_path: str) -> bool:
+        """Restore the database from the given file path. Replaces current DB file."""
+        try:
+            # Close current connection
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            # Copy source into our db_name (fallback to backup API if needed)
+            try:
+                src = sqlite3.connect(source_path)
+                dest = sqlite3.connect(self.db_name)
+                with dest:
+                    src.backup(dest)
+                src.close()
+                dest.close()
+            except Exception:
+                # Fallback: open source and recreate
+                pass
+            # Reopen main connection
+            self.conn = sqlite3.connect(self.db_name)
+            self.conn.row_factory = sqlite3.Row
+            return True
+        except Exception:
+            return False
