@@ -37,17 +37,21 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
         self.preview_label = ctk.CTkLabel(self, text="", width=640, height=480)
         self.preview_label.grid(row=0, column=0, columnspan=4, padx=10, pady=10)
 
+        # Live status label to show duplicate/quality info
+        self.status_label = ctk.CTkLabel(self, text="", font=("Segoe UI", 12))
+        self.status_label.grid(row=1, column=0, columnspan=4, padx=10, pady=(0, 6))
+
         self.capture_btn = ctk.CTkButton(self, text="CAPTURE", command=self.capture)
-        self.capture_btn.grid(row=1, column=0, padx=6, pady=8)
+        self.capture_btn.grid(row=2, column=0, padx=6, pady=8)
 
         self.retake_btn = ctk.CTkButton(self, text="RETAKE", command=self.retake, state="disabled")
-        self.retake_btn.grid(row=1, column=1, padx=6, pady=8)
+        self.retake_btn.grid(row=2, column=1, padx=6, pady=8)
 
         self.save_btn = ctk.CTkButton(self, text="SAVE", command=self.save, state="disabled")
-        self.save_btn.grid(row=1, column=2, padx=6, pady=8)
+        self.save_btn.grid(row=2, column=2, padx=6, pady=8)
 
         self.cancel_btn = ctk.CTkButton(self, text="CANCEL", command=self.on_cancel)
-        self.cancel_btn.grid(row=1, column=3, padx=6, pady=8)
+        self.cancel_btn.grid(row=2, column=3, padx=6, pady=8)
 
         # Start camera preview
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
@@ -89,6 +93,7 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
             return
 
         # perform detection overlay (use face_mgr detector)
+        faces = []
         display = frame.copy()
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -102,6 +107,40 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
                 faces = self.face_mgr.face_cascade.detectMultiScale(gray, 1.3, 5)
                 for (x, y, w, h) in faces:
                     cv2.rectangle(display, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        except Exception:
+            pass
+
+        # Live duplicate check when exactly one face is present
+        try:
+            dup = False
+            if len(faces) == 1:
+                if getattr(self.face_mgr, 'use_dlib', False):
+                    f = faces[0]
+                    x, y, w, h = f.left(), f.top(), f.width(), f.height()
+                else:
+                    x, y, w, h = faces[0]
+                # clip and crop
+                h_frame, w_frame = frame.shape[:2]
+                x, y, w, h = max(0, x), max(0, y), max(1, w), max(1, h)
+                x2 = min(x + w, w_frame)
+                y2 = min(y + h, h_frame)
+                face_img = frame[y:y2, x:x2]
+                dup, matched = self.face_mgr.is_face_duplicate(face_img)
+                if dup:
+                    try:
+                        cv2.putText(display, 'Duplicate face detected', (max(0, x), max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    except Exception:
+                        pass
+                    self.status_label.configure(text=f"Duplicate face found ({matched}). Save disabled.", text_color="#b00020")
+                    self.save_btn.configure(state="disabled")
+                else:
+                    self.status_label.configure(text="Face OK — ready to capture", text_color="#188038")
+            else:
+                # No or multiple faces: reset status
+                if len(faces) > 1:
+                    self.status_label.configure(text="Multiple faces detected — please isolate one face", text_color="#b00020")
+                else:
+                    self.status_label.configure(text="")
         except Exception:
             pass
 
@@ -137,6 +176,36 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
         imgtk = ImageTk.PhotoImage(image=img)
         self.preview_label.configure(image=imgtk)
 
+        # Post-capture duplicate check
+        faces = []
+        try:
+            gray = cv2.cvtColor(self.captured_frame, cv2.COLOR_BGR2GRAY)
+            if getattr(self.face_mgr, 'use_dlib', False):
+                faces = self.face_mgr.face_detector(gray)
+                if len(faces) > 0:
+                    f = faces[0]
+                    x, y, w, h = f.left(), f.top(), f.width(), f.height()
+                else:
+                    x, y, w, h = 0, 0, self.captured_frame.shape[1], self.captured_frame.shape[0]
+            else:
+                faces = self.face_mgr.face_cascade.detectMultiScale(gray, 1.3, 5)
+                if len(faces) > 0:
+                    x, y, w, h = faces[0]
+                else:
+                    x, y, w, h = 0, 0, self.captured_frame.shape[1], self.captured_frame.shape[0]
+            h_frame, w_frame = self.captured_frame.shape[:2]
+            x, y, w, h = max(0, x), max(0, y), max(1, w), max(1, h)
+            x2, y2 = min(x + w, w_frame), min(y + h, h_frame)
+            face_img = self.captured_frame[y:y2, x:x2]
+            dup, matched = self.face_mgr.is_face_duplicate(face_img)
+            if dup:
+                self.status_label.configure(text=f"Duplicate face found ({matched}). Please retake.", text_color="#b00020")
+                self.save_btn.configure(state="disabled")
+            else:
+                self.status_label.configure(text="Captured face OK — you may save", text_color="#188038")
+        except Exception:
+            pass
+
     def retake(self):
         # resume preview
         if not self.cap:
@@ -171,15 +240,16 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
 
         # brightness
         if gray is not None:
-            m = cv2.mean(gray)
-            brightness = float(m[0]) if isinstance(m, (tuple, list)) else float(m)
+            # OpenCV's mean returns a 4-tuple; first element is the channel mean
+            brightness = float(cv2.mean(gray)[0])
             if brightness < bmin or brightness > bmax:
                 messagebox.showwarning("Quality", f"Lighting unsuitable (brightness {brightness:.0f}). Please retake.")
                 return
 
         # sharpness
         try:
-            lap = cv2.Laplacian(gray if gray is not None else frame, cv2.CV_64F).var()
+            ddepth = getattr(cv2, 'CV_64F', -1)
+            lap = cv2.Laplacian(gray if gray is not None else frame, ddepth).var()
             if float(lap) < min_sharp:
                 messagebox.showwarning("Quality", f"Image is blurry (sharpness {lap:.0f}). Please retake.")
                 return
@@ -188,6 +258,7 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
 
         # face count
         try:
+            faces = []
             face_count = 0
             if getattr(self.face_mgr, 'use_dlib', False):
                 faces = self.face_mgr.face_detector(gray)
@@ -213,7 +284,7 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
                         # compute encoding using full-face crop to be safe
                         f = faces[0]
                         x, y, w, h = f.left(), f.top(), f.width(), f.height()
-                        crop = self.captured_frame[max(0,y):y+h, max(0,x):x+w]
+                        crop = self.captured_frame[max(0, y):y+h, max(0, x):x+w]
                         dlib_mod = getattr(self.face_mgr, 'dlib', None)
                         if dlib_mod is None:
                             raise RuntimeError("dlib not available")
@@ -223,54 +294,29 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
                 except Exception:
                     encoding = None
 
-            # Duplicate prevention: compare against existing enrolled faces
+            # Duplicate prevention using face manager helper
             try:
-                faces_dir = getattr(self.face_mgr, 'faces_dir', self.temp_dir)
-                is_dup = False
-                if getattr(self.face_mgr, 'use_dlib', False) and encoding is not None:
-                    import numpy as np
-                    for fname in os.listdir(faces_dir):
-                        if not (fname.startswith('employee_') and fname.endswith('.dat')):
-                            continue
-                        try:
-                            with open(os.path.join(faces_dir, fname), 'rb') as fdat:
-                                stored = pickle.load(fdat)
-                            dist = float(np.linalg.norm(np.array(encoding) - np.array(stored)))
-                            if dist < float(getattr(self.face_mgr, 'dlib_distance_threshold', 0.6)):
-                                is_dup = True
-                                break
-                        except Exception:
-                            continue
+                gray2 = cv2.cvtColor(self.captured_frame, cv2.COLOR_BGR2GRAY)
+                if getattr(self.face_mgr, 'use_dlib', False):
+                    faces2 = self.face_mgr.face_detector(gray2)
+                    if len(faces2) > 0:
+                        f = faces2[0]
+                        x, y, w, h = f.left(), f.top(), f.width(), f.height()
+                    else:
+                        x, y, w, h = 0, 0, self.captured_frame.shape[1], self.captured_frame.shape[0]
                 else:
-                    # ORB fallback duplicate check
-                    try:
-                        gray2 = cv2.cvtColor(self.captured_frame, cv2.COLOR_BGR2GRAY)
-                        faces2 = self.face_mgr.face_cascade.detectMultiScale(gray2, 1.3, 5)
-                        if len(faces2) > 0:
-                            x, y, w, h = faces2[0]
-                            face_img = self.captured_frame[y:y+h, x:x+w]
-                        else:
-                            face_img = self.captured_frame
-                        kp1, des1 = self.face_mgr.orb.detectAndCompute(face_img, None)
-                        if des1 is not None:
-                            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-                            for fname in os.listdir(faces_dir):
-                                if not (fname.startswith('employee_') and fname.endswith('.jpg')):
-                                    continue
-                                img = cv2.imread(os.path.join(faces_dir, fname))
-                                if img is None:
-                                    continue
-                                kp2, des2 = self.face_mgr.orb.detectAndCompute(img, None)
-                                if des2 is None:
-                                    continue
-                                matches = bf.match(des1, des2)
-                                if len(matches) >= int(getattr(self.face_mgr, 'orb_match_threshold', 10)):
-                                    is_dup = True
-                                    break
-                    except Exception:
-                        pass
+                    faces2 = self.face_mgr.face_cascade.detectMultiScale(gray2, 1.3, 5)
+                    if len(faces2) > 0:
+                        x, y, w, h = faces2[0]
+                    else:
+                        x, y, w, h = 0, 0, self.captured_frame.shape[1], self.captured_frame.shape[0]
+                h_frame, w_frame = self.captured_frame.shape[:2]
+                x, y, w, h = max(0, x), max(0, y), max(1, w), max(1, h)
+                x2, y2 = min(x + w, w_frame), min(y + h, h_frame)
+                face_img = self.captured_frame[y:y2, x:x2]
+                is_dup, matched = self.face_mgr.is_face_duplicate(face_img)
                 if is_dup:
-                    messagebox.showwarning("Duplicate", "This face matches an already registered face. Please retake or use a different person.")
+                    messagebox.showwarning("Duplicate", f"This face matches an already registered face ({matched}). Please retake or use a different person.")
                     return
             except Exception:
                 pass

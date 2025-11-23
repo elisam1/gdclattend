@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox, ttk, filedialog
+from typing import Optional, Any
 from datetime import datetime
 import os
 import importlib.util
@@ -13,6 +14,8 @@ class SettingsPage:
         self.colors = colors
         self.fonts = fonts
         self.face_mgr = face_mgr
+        # Preview image reference to satisfy type checker and prevent GC
+        self._settings_preview_imgtk: Optional[Any] = None
 
     def show(self):
         self.clear_parent()
@@ -591,7 +594,8 @@ class SettingsPage:
                 cv2image = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(cv2image).resize((640, 480))
                 imgtk = ImageTk.PhotoImage(image=img)
-                preview.image = imgtk
+                # Keep a reference to prevent garbage collection without assigning unknown attribute on CTkLabel
+                self._settings_preview_imgtk = imgtk
                 preview.configure(image=imgtk)
                 stats.configure(text=f"FPS ~ {fps[0]:.1f} | Res {frame.shape[1]}x{frame.shape[0]}")
             except Exception as e:

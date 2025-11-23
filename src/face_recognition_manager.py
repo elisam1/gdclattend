@@ -84,6 +84,74 @@ class FaceRecognitionManager:
         except Exception:
             pass
 
+    # -------------------- Duplicate check helper --------------------
+    def is_face_duplicate(self, face_img) -> tuple:
+        """Return (is_duplicate, matched_file) for the provided face image.
+
+        - In dlib mode: computes 128-D descriptor and compares L2 distance to stored .dat files.
+        - In ORB fallback: computes keypoints/descriptors and compares match count to stored .jpg files.
+        """
+        try:
+            if face_img is None:
+                return False, None
+            if self.use_dlib:
+                import numpy as np
+                try:
+                    gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+                except Exception:
+                    gray = None
+                if gray is None:
+                    return False, None
+                try:
+                    # Build a synthetic rect for the full face_img and compute descriptor
+                    rect = dlib.rectangle(0, 0, face_img.shape[1], face_img.shape[0])  # type: ignore
+                    shape = self.shape_predictor(gray, rect)
+                    encoding = self.face_recognizer.compute_face_descriptor(face_img, shape)
+                except Exception:
+                    return False, None
+                # Compare against all stored encodings
+                for fname in os.listdir(self.faces_dir):
+                    if not (fname.startswith('employee_') and fname.endswith('.dat')):
+                        continue
+                    fpath = os.path.join(self.faces_dir, fname)
+                    try:
+                        with open(fpath, 'rb') as f:
+                            stored = pickle.load(f)
+                        dist = float(np.linalg.norm(np.array(encoding) - np.array(stored)))
+                        if dist < float(self.dlib_distance_threshold):
+                            return True, fname
+                    except Exception:
+                        continue
+                return False, None
+            else:
+                # ORB fallback duplicate check using BFMatcher
+                try:
+                    kp1, des1 = self.orb.detectAndCompute(face_img, None)
+                except Exception:
+                    kp1, des1 = None, None
+                if des1 is None:
+                    return False, None
+                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                for fname in os.listdir(self.faces_dir):
+                    if not (fname.startswith('employee_') and fname.endswith('.jpg')):
+                        continue
+                    fpath = os.path.join(self.faces_dir, fname)
+                    try:
+                        img = cv2.imread(fpath)
+                        if img is None:
+                            continue
+                        kp2, des2 = self.orb.detectAndCompute(img, None)
+                        if des2 is None:
+                            continue
+                        matches = bf.match(des1, des2)
+                        if len(matches) >= int(self.orb_match_threshold):
+                            return True, fname
+                    except Exception:
+                        continue
+                return False, None
+        except Exception:
+            return False, None
+
     # -------------------- Camera helpers --------------------
     def _open_capture(self, camera_index: int = 0, backend: Optional[int] = None):
         if backend is None:
@@ -187,64 +255,10 @@ class FaceRecognitionManager:
             print('enroll_face: no face captured')
             return False
         # Duplicate prevention before saving
-        try:
-            is_dup = False
-            if self.use_dlib:
-                try:
-                    gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-                    faces = self.face_detector(gray)
-                    if len(faces) > 0:
-                        shape = self.shape_predictor(gray, faces[0])
-                        encoding = self.face_recognizer.compute_face_descriptor(face_img, shape)
-                        # Compare with existing encodings
-                        import numpy as np
-                        for fname in os.listdir(self.faces_dir):
-                            if not (fname.startswith('employee_') and fname.endswith('.dat')):
-                                continue
-                            try:
-                                with open(os.path.join(self.faces_dir, fname), 'rb') as f:
-                                    stored = pickle.load(f)
-                                dist = float(np.linalg.norm(np.array(encoding) - np.array(stored)))
-                                if dist < float(self.dlib_distance_threshold):
-                                    is_dup = True
-                                    break
-                            except Exception:
-                                continue
-                        if is_dup:
-                            print('enroll_face: duplicate detected (dlib), not saving')
-                            return False
-                        # Save encoding alongside image
-                        encoding_path = os.path.join(self.faces_dir, f"employee_{employee_id}.dat")
-                        with open(encoding_path, 'wb') as f:
-                            pickle.dump(encoding, f)
-                except Exception as e:
-                    print('enroll_face: dlib duplicate check failed:', e)
-            else:
-                try:
-                    # ORB duplicate check using BFMatcher
-                    kp1, des1 = self.orb.detectAndCompute(face_img, None)
-                    if des1 is not None:
-                        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-                        for fname in os.listdir(self.faces_dir):
-                            if not (fname.startswith('employee_') and fname.endswith('.jpg')):
-                                continue
-                            img = cv2.imread(os.path.join(self.faces_dir, fname))
-                            if img is None:
-                                continue
-                            kp2, des2 = self.orb.detectAndCompute(img, None)
-                            if des2 is None:
-                                continue
-                            matches = bf.match(des1, des2)
-                            if len(matches) >= int(self.orb_match_threshold):
-                                is_dup = True
-                                break
-                    if is_dup:
-                        print('enroll_face: duplicate detected (ORB), not saving')
-                        return False
-                except Exception as e:
-                    print('enroll_face: ORB duplicate check failed:', e)
-        except Exception:
-            pass
+        dup, matched = self.is_face_duplicate(face_img)
+        if dup:
+            print(f'enroll_face: duplicate detected ({matched}), not saving')
+            return False
 
         # Save final image
         path = os.path.join(self.faces_dir, f"employee_{employee_id}.jpg")

@@ -8,6 +8,7 @@ from tkinter import messagebox, Label
 import threading
 import cv2
 from PIL import Image, ImageTk
+from typing import Optional, Any
 
 class MarkAttendancePage:
     def __init__(self, parent, db, colors, fonts, face_mgr, firebase=None):
@@ -21,6 +22,8 @@ class MarkAttendancePage:
         self.stop_cam = False
         self.preview_window = None
         self._live_thread = None
+        # Preview image reference to satisfy type checker and prevent GC
+        self._preview_imgtk: Optional[Any] = None
 
     # ------------------------------------------------------------
     # PAGE UI
@@ -160,10 +163,19 @@ class MarkAttendancePage:
                 except Exception:
                     pass
 
+                # Ensure 'score' is numeric for Pylance and runtime safety
                 if getattr(self.face_mgr, 'use_dlib', False):
-                    conf_text = f"{int(max(0.0, min(1.0, score)) * 100)}%"
+                    try:
+                        s = float(score) if score is not None else 0.0
+                    except Exception:
+                        s = 0.0
+                    conf_text = f"{int(max(0.0, min(1.0, s)) * 100)}%"
                 else:
-                    conf_text = f"matches: {int(score)}"
+                    try:
+                        s_int = int(score) if isinstance(score, (int, float)) else 0
+                    except Exception:
+                        s_int = 0
+                    conf_text = f"matches: {s_int}"
 
                 rec_text = f"Recognized: {emp_name or emp_id} (conf {conf_text})"
                 try:
@@ -191,7 +203,8 @@ class MarkAttendancePage:
         # keep reasonable size
         img = img.resize((640, 480))
         imgtk = ImageTk.PhotoImage(image=img)
-        self.preview_label.image = imgtk  # type: ignore
+        # Keep a reference on the page object to prevent GC without assigning unknown attributes
+        self._preview_imgtk = imgtk
         self.preview_label.configure(image=imgtk)
 
         # schedule next frame using configured FPS
