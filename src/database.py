@@ -93,6 +93,7 @@ class Database:
                 ('smtp_password', ''),
                 ('smtp_use_tls', 'true'),
                 ('smtp_use_ssl', 'false'),
+                ('attendance_mode', 'both'),
             ]
             for k, v in defaults:
                 cursor.execute("SELECT key FROM settings WHERE key = ?", (k,))
@@ -204,6 +205,31 @@ class Database:
                        (name, email, fingerprint_id, fingerprint_template))
         self.conn.commit()
         return cursor.lastrowid  # Return the employee ID for reference
+
+    def update_employee(self, employee_id, name=None, email=None, fingerprint_id=None, fingerprint_template=None):
+        """Update an existing employee's details. Only updates provided non-None values."""
+        cursor = self.conn.cursor()
+        updates = []
+        params = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if email is not None:
+            updates.append("email = ?")
+            params.append(email)
+        if fingerprint_id is not None:
+            updates.append("fingerprint_id = ?")
+            params.append(fingerprint_id)
+        if fingerprint_template is not None:
+            updates.append("fingerprint_template = ?")
+            params.append(fingerprint_template)
+        if not updates:
+            return False  # Nothing to update
+        query = f"UPDATE employees SET {', '.join(updates)} WHERE id = ?"
+        params.append(employee_id)
+        cursor.execute(query, params)
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     # --- Attendance helpers: arrival/departure per day ---
     def _today_date(self):

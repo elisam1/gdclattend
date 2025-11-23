@@ -1,10 +1,13 @@
 import customtkinter as ctk
 from src.database import Database
 from src.firebase_manager import FirebaseManager
-from src.ui import AdminDashboard
+from src.admin_dashboard import AdminDashboard
 from src.login import LoginScreen
+from src.api import start_api_server
 
 print("🚀 Starting GDC Attendance App...")
+# Start the Flask API server in the background
+start_api_server()
 
 import os
 firebase = FirebaseManager()   # make sure this connects to real Firebase

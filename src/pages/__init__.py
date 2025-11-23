@@ -1,0 +1,1 @@
+"""Pages package initializer to enable relative imports like '..fingerprint_scanner'."""
