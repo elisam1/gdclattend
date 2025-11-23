@@ -10,7 +10,8 @@ class UserManagementPage:
 
     def show(self):
         self.clear_parent()
-        self.current_frame = ctk.CTkFrame(self.parent, fg_color="transparent")
+        # Make the main page container scrollable to keep content accessible
+        self.current_frame = ctk.CTkScrollableFrame(self.parent, fg_color="transparent")
         self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
 
         self.create_page_header("User Management", "Manage system users and roles")

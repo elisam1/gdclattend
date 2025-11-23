@@ -69,10 +69,19 @@ class MarkAttendancePage:
             return
 
         self.preview_running = True
-        # Create preview label if not present
-        if not hasattr(self, 'preview_label') or self.preview_label is None:
-            self.preview_label = ctk.CTkLabel(self.current_frame, text="")
-            self.preview_label.pack(pady=(10, 10))
+        self._pending_mark = False
+        self._last_verify_ts = 0.0
+        # Performance config from settings
+        try:
+            fps = int(self.db.get_setting('face_preview_fps', '15'))
+            rate_hz = int(self.db.get_setting('face_verify_rate_hz', '3'))
+        except Exception:
+            fps, rate_hz = 15, 3
+        fps = max(5, min(60, fps))
+        rate_hz = max(1, min(15, rate_hz))
+        self._preview_interval_ms = int(1000 / fps)
+        self._verify_min_interval_s = 1.0 / float(rate_hz)
+        # Preview label is created in _render_face_mode; do not recreate here
 
         # Kick off update loop
         self._update_preview()
@@ -80,12 +89,15 @@ class MarkAttendancePage:
     def _stop_live_preview(self):
         try:
             self.preview_running = False
+            self._pending_mark = False
             if hasattr(self, 'cap') and self.cap:
                 self.cap.release()
             # Clear label image
             if hasattr(self, 'preview_label') and self.preview_label:
                 self.preview_label.configure(image=None)
                 self.preview_label.image = None  # type: ignore
+            if hasattr(self, 'recog_info_label') and self.recog_info_label:
+                self.recog_info_label.configure(text="")
         except Exception:
             pass
 
@@ -104,27 +116,72 @@ class MarkAttendancePage:
 
         # draw detection boxes
         display = frame.copy()
+        face_count = 0
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if getattr(self.face_mgr, 'use_dlib', False):
                 faces = self.face_mgr.face_detector(gray)
+                face_count = len(faces)
                 for f in faces:
                     x, y, w, h = f.left(), f.top(), f.width(), f.height()
                     cv2.rectangle(display, (x, y), (x+w, y+h), (0, 255, 0), 2)
             else:
                 faces = self.face_mgr.face_cascade.detectMultiScale(gray, 1.3, 5)
+                face_count = len(faces)
                 for (x, y, w, h) in faces:
                     cv2.rectangle(display, (x, y), (x+w, y+h), (0, 255, 0), 2)
         except Exception:
             pass
 
-        # Attempt recognition on the current frame
+        # Overlay face count
         try:
-            emp_id, score = self.face_mgr.verify_frame(frame)
+            cv2.putText(display, f"Faces: {face_count}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 215, 0), 2)
+        except Exception:
+            pass
+
+        # Attempt recognition on the current frame (throttled)
+        try:
+            import time
+            now = time.monotonic()
+            # Throttle verify calls using configured rate
+            do_verify = (now - getattr(self, '_last_verify_ts', 0.0)) >= getattr(self, '_verify_min_interval_s', 0.33)
+            emp_id, score = (None, None)
+            if do_verify:
+                emp_id, score = self.face_mgr.verify_frame(frame)
+                self._last_verify_ts = now
             if emp_id is not None:
-                # Stop preview and mark attendance
-                self._stop_live_preview()
-                self.parent.after(0, lambda: self._mark_by_employee_id(emp_id))
+                # Prepare overlay text
+                emp_name = None
+                try:
+                    for emp in self.db.get_all_employees():
+                        if int(emp[0]) == int(emp_id):
+                            emp_name = emp[1]
+                            break
+                except Exception:
+                    pass
+
+                if getattr(self.face_mgr, 'use_dlib', False):
+                    conf_text = f"{int(max(0.0, min(1.0, score)) * 100)}%"
+                else:
+                    conf_text = f"matches: {int(score)}"
+
+                rec_text = f"Recognized: {emp_name or emp_id} (conf {conf_text})"
+                try:
+                    cv2.putText(display, rec_text, (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (50, 205, 50), 2)
+                except Exception:
+                    pass
+
+                # Update UI status label if present
+                try:
+                    if hasattr(self, 'recog_info_label') and self.recog_info_label:
+                        self.recog_info_label.configure(text=rec_text)
+                except Exception:
+                    pass
+
+                # Briefly show overlays, then mark once
+                if not getattr(self, '_pending_mark', False):
+                    self._pending_mark = True
+                    self.parent.after(800, lambda eid=emp_id: self._on_recognition_confirm(eid))
         except Exception:
             pass
 
@@ -137,8 +194,41 @@ class MarkAttendancePage:
         self.preview_label.image = imgtk  # type: ignore
         self.preview_label.configure(image=imgtk)
 
-        # schedule next frame
-        self.parent.after(30, self._update_preview)
+        # schedule next frame using configured FPS
+        self.parent.after(getattr(self, '_preview_interval_ms', 66), self._update_preview)
+
+    def _on_recognition_confirm(self, employee_id: int):
+        # Optionally confirm before marking
+        confirm = self.db.get_setting('face_confirm_before_mark', 'false') == 'true'
+        emp_name = None
+        try:
+            for emp in self.db.get_all_employees():
+                if int(emp[0]) == int(employee_id):
+                    emp_name = emp[1]
+                    break
+        except Exception:
+            pass
+
+        proceed = True
+        if confirm:
+            try:
+                proceed = messagebox.askyesno("Confirm", f"Mark attendance for {emp_name or employee_id}?")
+            except Exception:
+                proceed = True
+        try:
+            self._stop_live_preview()
+        except Exception:
+            pass
+        if proceed:
+            self._mark_by_employee_id(employee_id)
+        else:
+            # Reset and resume preview
+            self._pending_mark = False
+            try:
+                cam_idx = int(self.db.get_setting('camera_index', '0'))
+            except Exception:
+                cam_idx = 0
+            self._start_live_preview(cam_idx)
 
     # ------------------------------------------------------------
     # SCAN HANDLER
@@ -218,6 +308,14 @@ class MarkAttendancePage:
 
         ctk.CTkLabel(container, text="Stand in front of the camera for recognition", font=self.fonts['subheader']).pack(pady=(0, 10))
 
+        # Create preview holder before starting camera
+        try:
+            self.preview_label = ctk.CTkLabel(container, text="", width=640, height=480)
+            self.preview_label.pack(pady=(10, 10))
+        except Exception:
+            self.preview_label = ctk.CTkLabel(container, text="")
+            self.preview_label.pack(pady=(10, 10))
+
         # Start camera automatically
         try:
             cam_idx = int(self.db.get_setting('camera_index', '0'))
@@ -229,6 +327,10 @@ class MarkAttendancePage:
         controls = ctk.CTkFrame(container, fg_color="transparent")
         controls.pack(pady=(10, 0))
         ctk.CTkButton(controls, text="Stop Camera", command=self._stop_live_preview, width=140).pack(side="left", padx=(0, 10))
+
+        # Recognition status label
+        self.recog_info_label = ctk.CTkLabel(container, text="", font=self.fonts['text'], text_color=self.colors['text'])
+        self.recog_info_label.pack(pady=(10, 0))
 
     def _render_fingerprint_mode(self, container):
         icon_frame = ctk.CTkFrame(container, width=150, height=150, corner_radius=75, fg_color=self.colors['primary'])

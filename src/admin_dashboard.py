@@ -15,7 +15,7 @@ from .email_manager import EmailManager
 
 
 class AdminDashboard:
-    def __init__(self, root, db, firebase=None, user_id=None, role=None, on_logout=None):
+    def __init__(self, root, db, firebase=None, user_id=None, role=None, on_logout=None, faces_dir=None, company_name=None):
         # Core refs
         self.root = root
         self.db = db
@@ -65,7 +65,11 @@ class AdminDashboard:
         }
 
         # Shared managers
-        self.face_mgr = FaceRecognitionManager()
+        # Use company-specific faces directory if provided
+        if faces_dir:
+            self.face_mgr = FaceRecognitionManager(faces_dir=faces_dir)
+        else:
+            self.face_mgr = FaceRecognitionManager()
         self.email_mgr = EmailManager(self.db)
 
         # Root layout: header, nav, content
@@ -77,6 +81,19 @@ class AdminDashboard:
 
         title = ctk.CTkLabel(self.header, text="GDC ATTENDANCE SYSTEM", font=self.fonts['title'], text_color="white")
         title.pack(side="left", padx=20, pady=10)
+
+        # Active company banner on the right
+        try:
+            company_text = company_name or "default"
+            self.company_label = ctk.CTkLabel(
+                self.header,
+                text=f"Company: {company_text}",
+                font=self.fonts['small'],
+                text_color="white"
+            )
+            self.company_label.pack(side="right", padx=20)
+        except Exception:
+            pass
 
         # Simple top navigation
         self.nav = ctk.CTkFrame(self.container, fg_color="transparent")

@@ -2,10 +2,11 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 class LoginScreen:
-    def __init__(self, root, db, on_login_success):
+    def __init__(self, root, db, on_login_success, company_name=None):
         self.root = root
         self.db = db
         self.on_login_success = on_login_success
+        self.company_name = company_name or "default"
         
         # Configure the window
         self.root.title("GDC Attendance System - Login")
@@ -32,6 +33,19 @@ class LoginScreen:
             text_color="white"
         )
         self.title_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Active company banner below header
+        try:
+            self.company_label = ctk.CTkLabel(
+                self.main_frame,
+                text=f"Company: {self.company_name}",
+                font=("Roboto", 12),
+                text_color="#FFFFFF"
+            )
+            # Place it overlapping bottom of header in a subtle way
+            self.company_label.place(relx=0.98, y=75, anchor="e")
+        except Exception:
+            pass
         
         # Create login form
         self.form_frame = ctk.CTkFrame(self.main_frame, fg_color=self.bg_color)

@@ -68,6 +68,22 @@ class FaceRecognitionManager:
         else:
             print('FaceRecognitionManager: dlib not installed — using OpenCV fallback')
 
+        # Thresholds and runtime tuning
+        # Dlib: smaller distance means closer match; threshold default 0.6
+        self.dlib_distance_threshold: float = 0.6
+        # ORB: number of good matches; threshold default 10
+        self.orb_match_threshold: int = 10
+
+    def set_thresholds(self, dlib_distance: Optional[float] = None, orb_match: Optional[int] = None):
+        """Update matching thresholds at runtime."""
+        try:
+            if dlib_distance is not None:
+                self.dlib_distance_threshold = float(dlib_distance)
+            if orb_match is not None:
+                self.orb_match_threshold = int(orb_match)
+        except Exception:
+            pass
+
     # -------------------- Camera helpers --------------------
     def _open_capture(self, camera_index: int = 0, backend: Optional[int] = None):
         if backend is None:
@@ -170,23 +186,69 @@ class FaceRecognitionManager:
         if face_img is None:
             print('enroll_face: no face captured')
             return False
+        # Duplicate prevention before saving
+        try:
+            is_dup = False
+            if self.use_dlib:
+                try:
+                    gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+                    faces = self.face_detector(gray)
+                    if len(faces) > 0:
+                        shape = self.shape_predictor(gray, faces[0])
+                        encoding = self.face_recognizer.compute_face_descriptor(face_img, shape)
+                        # Compare with existing encodings
+                        import numpy as np
+                        for fname in os.listdir(self.faces_dir):
+                            if not (fname.startswith('employee_') and fname.endswith('.dat')):
+                                continue
+                            try:
+                                with open(os.path.join(self.faces_dir, fname), 'rb') as f:
+                                    stored = pickle.load(f)
+                                dist = float(np.linalg.norm(np.array(encoding) - np.array(stored)))
+                                if dist < float(self.dlib_distance_threshold):
+                                    is_dup = True
+                                    break
+                            except Exception:
+                                continue
+                        if is_dup:
+                            print('enroll_face: duplicate detected (dlib), not saving')
+                            return False
+                        # Save encoding alongside image
+                        encoding_path = os.path.join(self.faces_dir, f"employee_{employee_id}.dat")
+                        with open(encoding_path, 'wb') as f:
+                            pickle.dump(encoding, f)
+                except Exception as e:
+                    print('enroll_face: dlib duplicate check failed:', e)
+            else:
+                try:
+                    # ORB duplicate check using BFMatcher
+                    kp1, des1 = self.orb.detectAndCompute(face_img, None)
+                    if des1 is not None:
+                        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                        for fname in os.listdir(self.faces_dir):
+                            if not (fname.startswith('employee_') and fname.endswith('.jpg')):
+                                continue
+                            img = cv2.imread(os.path.join(self.faces_dir, fname))
+                            if img is None:
+                                continue
+                            kp2, des2 = self.orb.detectAndCompute(img, None)
+                            if des2 is None:
+                                continue
+                            matches = bf.match(des1, des2)
+                            if len(matches) >= int(self.orb_match_threshold):
+                                is_dup = True
+                                break
+                    if is_dup:
+                        print('enroll_face: duplicate detected (ORB), not saving')
+                        return False
+                except Exception as e:
+                    print('enroll_face: ORB duplicate check failed:', e)
+        except Exception:
+            pass
 
+        # Save final image
         path = os.path.join(self.faces_dir, f"employee_{employee_id}.jpg")
         cv2.imwrite(path, face_img)
-
-        if self.use_dlib:
-            try:
-                gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-                faces = self.face_detector(gray)
-                if len(faces) > 0:
-                    shape = self.shape_predictor(gray, faces[0])
-                    encoding = self.face_recognizer.compute_face_descriptor(face_img, shape)
-                    encoding_path = os.path.join(self.faces_dir, f"employee_{employee_id}.dat")
-                    with open(encoding_path, 'wb') as f:
-                        pickle.dump(encoding, f)
-            except Exception as e:
-                print('enroll_face: saving dlib encoding failed:', e)
-
         print(f'enroll_face: saved employee_{employee_id}')
         return True
 
@@ -334,9 +396,9 @@ class FaceRecognitionManager:
                             best_id = emp_id
                     except Exception:
                         continue
-                # Convert distance to a score (higher is better)
-                score = float(max(0.0, 1.0 - (best_distance / 1.0))) if best_distance != float('inf') else 0.0
-                if best_id is not None:
+                # Gate by threshold; convert distance to a score (higher is better)
+                if best_id is not None and best_distance < self.dlib_distance_threshold:
+                    score = float(max(0.0, 1.0 - (best_distance / 1.0)))
                     return best_id, score
                 return None, 0.0
             else:
@@ -373,7 +435,7 @@ class FaceRecognitionManager:
                         except Exception:
                             emp_id = None
                         best_id = emp_id
-                if best_id is not None:
+                if best_id is not None and best_score >= int(self.orb_match_threshold):
                     return best_id, float(best_score)
                 return None, 0.0
         except Exception:
@@ -436,7 +498,7 @@ class FaceRecognitionManager:
                             except Exception:
                                 continue
 
-                        if best_distance < 0.6 and best_id is not None and best_id not in detected_today:
+                        if best_distance < self.dlib_distance_threshold and best_id is not None and best_id not in detected_today:
                             detected_today.add(best_id)
                             if on_detection:
                                 try:
@@ -481,7 +543,7 @@ class FaceRecognitionManager:
                                     emp_id = None
                                 best_id = emp_id
 
-                        if best_score >= 10 and best_id is not None and best_id not in detected_today:
+                        if best_score >= int(self.orb_match_threshold) and best_id is not None and best_id not in detected_today:
                             detected_today.add(best_id)
                             if on_detection:
                                 try:

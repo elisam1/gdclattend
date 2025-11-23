@@ -16,13 +16,14 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
         result = win.result  # dict with keys: saved (bool), image_path (str or None), encoding (object or None)
     """
 
-    def __init__(self, parent, face_mgr, camera_index=0, temp_dir=None):
+    def __init__(self, parent, face_mgr, camera_index=0, temp_dir=None, db=None):
         super().__init__(parent)
         self.title("Face Enrollment")
         self.face_mgr = face_mgr
         self.camera_index = camera_index
         self.temp_dir = temp_dir or os.path.join(os.getcwd(), "faces")
         os.makedirs(self.temp_dir, exist_ok=True)
+        self.db = db
 
         # result to be inspected by caller
         self.result = {"saved": False, "image_path": None, "encoding": None}
@@ -152,6 +153,53 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
         if self.captured_frame is None:
             messagebox.showwarning("Save", "No captured frame to save. Press Capture first.")
             return
+        # Quality checks: single face, sharpness, brightness
+        import cv2
+        frame = self.captured_frame
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            gray = None
+        # Default thresholds
+        try:
+            min_sharp = float(self.db.get_setting('enroll_min_sharpness', '100')) if self.db else 100.0
+            bmin = float(self.db.get_setting('enroll_brightness_min', '40')) if self.db else 40.0
+            bmax = float(self.db.get_setting('enroll_brightness_max', '220')) if self.db else 220.0
+            require_single = (self.db.get_setting('enroll_require_single_face', 'true') == 'true') if self.db else True
+        except Exception:
+            min_sharp, bmin, bmax, require_single = 100.0, 40.0, 220.0, True
+
+        # brightness
+        if gray is not None:
+            m = cv2.mean(gray)
+            brightness = float(m[0]) if isinstance(m, (tuple, list)) else float(m)
+            if brightness < bmin or brightness > bmax:
+                messagebox.showwarning("Quality", f"Lighting unsuitable (brightness {brightness:.0f}). Please retake.")
+                return
+
+        # sharpness
+        try:
+            lap = cv2.Laplacian(gray if gray is not None else frame, cv2.CV_64F).var()
+            if float(lap) < min_sharp:
+                messagebox.showwarning("Quality", f"Image is blurry (sharpness {lap:.0f}). Please retake.")
+                return
+        except Exception:
+            pass
+
+        # face count
+        try:
+            face_count = 0
+            if getattr(self.face_mgr, 'use_dlib', False):
+                faces = self.face_mgr.face_detector(gray)
+                face_count = len(faces)
+            else:
+                faces = self.face_mgr.face_cascade.detectMultiScale(gray, 1.3, 5)
+                face_count = len(faces)
+            if require_single and face_count != 1:
+                messagebox.showwarning("Quality", f"Detected {face_count} faces. Please ensure only one face is visible.")
+                return
+        except Exception:
+            pass
 
         temp_path = os.path.join(self.temp_dir, "employee_temp.jpg")
         try:
@@ -174,6 +222,58 @@ class FaceEnrollmentWindow(ctk.CTkToplevel):
                         encoding = self.face_mgr.face_recognizer.compute_face_descriptor(crop, shape)
                 except Exception:
                     encoding = None
+
+            # Duplicate prevention: compare against existing enrolled faces
+            try:
+                faces_dir = getattr(self.face_mgr, 'faces_dir', self.temp_dir)
+                is_dup = False
+                if getattr(self.face_mgr, 'use_dlib', False) and encoding is not None:
+                    import numpy as np
+                    for fname in os.listdir(faces_dir):
+                        if not (fname.startswith('employee_') and fname.endswith('.dat')):
+                            continue
+                        try:
+                            with open(os.path.join(faces_dir, fname), 'rb') as fdat:
+                                stored = pickle.load(fdat)
+                            dist = float(np.linalg.norm(np.array(encoding) - np.array(stored)))
+                            if dist < float(getattr(self.face_mgr, 'dlib_distance_threshold', 0.6)):
+                                is_dup = True
+                                break
+                        except Exception:
+                            continue
+                else:
+                    # ORB fallback duplicate check
+                    try:
+                        gray2 = cv2.cvtColor(self.captured_frame, cv2.COLOR_BGR2GRAY)
+                        faces2 = self.face_mgr.face_cascade.detectMultiScale(gray2, 1.3, 5)
+                        if len(faces2) > 0:
+                            x, y, w, h = faces2[0]
+                            face_img = self.captured_frame[y:y+h, x:x+w]
+                        else:
+                            face_img = self.captured_frame
+                        kp1, des1 = self.face_mgr.orb.detectAndCompute(face_img, None)
+                        if des1 is not None:
+                            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                            for fname in os.listdir(faces_dir):
+                                if not (fname.startswith('employee_') and fname.endswith('.jpg')):
+                                    continue
+                                img = cv2.imread(os.path.join(faces_dir, fname))
+                                if img is None:
+                                    continue
+                                kp2, des2 = self.face_mgr.orb.detectAndCompute(img, None)
+                                if des2 is None:
+                                    continue
+                                matches = bf.match(des1, des2)
+                                if len(matches) >= int(getattr(self.face_mgr, 'orb_match_threshold', 10)):
+                                    is_dup = True
+                                    break
+                    except Exception:
+                        pass
+                if is_dup:
+                    messagebox.showwarning("Duplicate", "This face matches an already registered face. Please retake or use a different person.")
+                    return
+            except Exception:
+                pass
 
             self.result = {"saved": True, "image_path": temp_path, "encoding": encoding}
             messagebox.showinfo("Saved", "Face captured and saved temporarily. It will be linked when you save the employee.")
@@ -207,7 +307,8 @@ class AddEmployeePage:
 
     def show(self):
         self.clear_parent()
-        self.current_frame = ctk.CTkFrame(self.parent, fg_color="transparent")
+        # Use a scrollable frame so long forms remain usable on small windows
+        self.current_frame = ctk.CTkScrollableFrame(self.parent, fg_color="transparent")
         self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
 
         self.create_page_header("Register New Employee", "Add a new employee to the system")
@@ -430,7 +531,7 @@ class AddEmployeePage:
         """Open the FaceEnrollmentWindow (Design 2) and cache the temp image + encoding for later save."""
         try:
             cam_idx = int(self.db.get_setting('camera_index', '0'))
-            win = FaceEnrollmentWindow(self.parent, self.face_mgr, camera_index=cam_idx, temp_dir=self.face_mgr.faces_dir)
+            win = FaceEnrollmentWindow(self.parent, self.face_mgr, camera_index=cam_idx, temp_dir=self.face_mgr.faces_dir, db=self.db)
             self.parent.wait_window(win)
             result = win.result
             if result and result.get('saved'):

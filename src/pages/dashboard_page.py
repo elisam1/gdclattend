@@ -11,7 +11,8 @@ class DashboardPage:
 
     def show(self):
         self.clear_parent()
-        self.current_frame = ctk.CTkFrame(self.parent, fg_color="transparent")
+        # Make dashboard scrollable so sections remain reachable on small windows
+        self.current_frame = ctk.CTkScrollableFrame(self.parent, fg_color="transparent")
         self.current_frame.pack(expand=True, fill="both", padx=20, pady=20)
 
         self.create_page_header("Dashboard", "Welcome to GDC Attendance System")
